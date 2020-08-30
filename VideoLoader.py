@@ -1,11 +1,14 @@
 from PIL import Image
+import cv2
 class ImageLoaderPIL(object):
 
     def __call__(self, path):
         # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
-        with path.open('rb') as f:
-            with Image.open(f) as img:
-                return img.convert('RGB')
+        path = str(path)
+        return cv2.imread(path)
+        # with path.open('rb') as f:
+        #     with Image.open(f) as img:
+        #         return img.convert('RGB')
 
 class VideoLoader(object):
 

@@ -52,8 +52,8 @@ def _calc_label_smoothing_loss(softmax_out, label, class_dim, epsilon):
 
 
 if __name__ == '__main__':
-    root_path = '/home/aistudio/dataset/UCF-101-jpg'
-    # root_path = '/Users/alex/baidu/UCF-101-jpg'
+    # root_path = '/home/aistudio/dataset/UCF-101-jpg'
+    root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
     annotation_path = 'ucf101_json/ucf101_01.json'
     train_reader = custom_reader(Path(root_path), Path(annotation_path), mode='train', batch_size=BATCH_SIZE)
     mixup_train_reader = custom_reader(Path(root_path), Path(annotation_path), mode='train', batch_size=BATCH_SIZE)
@@ -66,7 +66,7 @@ if __name__ == '__main__':
         drop_last=True)
     iter_per_epoch = num_sample // BATCH_SIZE
     boundaries = [iter_per_epoch * 50, iter_per_epoch * 100, iter_per_epoch * 150]
-    use_gpu = True
+    use_gpu = False
     place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
 
     with fluid.dygraph.guard(place):

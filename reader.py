@@ -3,8 +3,8 @@ import json
 import paddle
 from VideoLoader import VideoLoader
 from temporal_transforms import Compose as TemporalCompose,TemporalRandomCrop, TemporalEvenCrop,SlidingWindow
-from augment import group_random_crop, group_random_flip, group_multi_scale_crop, group_center_crop, group_scale
-from augment import group_random_corner_crop,group_random_crop1, MultiScaleRandomCrop
+from spatial_transforms import Compose, RandomResizedCrop, RandomHorizontalFlip, ScaleValue, Normalize, Resize, CenterCrop
+
 import numpy as np
 import copy
 from  autoaugment import ImageNetPolicy
@@ -133,23 +133,10 @@ class VideoDataset():
 
     def __loading(self, path, frame_indices):
         clip = self.loader(path, frame_indices)
-        segments = []
-
-        clip = group_random_crop(clip, 112)
-        # clip = group_multi_scale_crop(clip, 112)
-
-        # clip = group_random_corner_crop(clip, 112)
-        # clip = group_center_crop(clip, 112)
-        # clip = self.policy(clip)
-        clip = group_random_flip(clip)
-
-        frames = []
-        for c in clip:
-            img = np.array(c)
-            frames.append(img)
-        clip = np.stack(frames) / 255.0
-        clip -= self.img_mean
-        clip /= self.img_std
+        if self.spatial_transform is not None:
+            self.spatial_transform.randomize_parameters()
+            clip = [self.spatial_transform(img) for img in clip]
+        clip = np.stack(clip)
         clip = np.transpose(clip, [3, 0, 1, 2]).astype('float32')
 
         return clip
@@ -181,12 +168,6 @@ class VideoDataset():
                 frame_indices = data[index]['frame_indices']
                 if self.temporal_transform is not None:
                     frame_indices = self.temporal_transform(frame_indices)
-
-                n = len(frame_indices) // 16
-                frame_indices = frame_indices[::n]
-                # if random.random() > 0.5:
-                #     s = Shuffle(block_size=2)
-                #     frame_indices = s(frame_indices)
 
                 clip = self.__loading(path, frame_indices)
 
@@ -220,20 +201,10 @@ class VideoDatasetMultiClips(VideoDataset):
         segments = []
         for clip_frame_indices in video_frame_indices:
             clip = self.loader(path, clip_frame_indices)
-
-            clip = group_scale(clip, 112)
-            clip = group_center_crop(clip, 112)
-            # if self.spatial_transform is not None:
-            #     self.spatial_transform.randomize_parameters()
-            #     clip = [self.spatial_transform(img) for img in clip]
-            # clips.append(torch.stack(clip, 0).permute(1, 0, 2, 3))
-            frames = []
-            for c in clip:
-                img = np.array(c)
-                frames.append(img)
-            clip = np.stack(frames) / 255.0
-            clip -= self.img_mean
-            clip /= self.img_std
+            if self.spatial_transform is not None:
+                self.spatial_transform.randomize_parameters()
+                clip = [self.spatial_transform(img) for img in clip]
+            clip = np.stack(clip)
             clip = np.transpose(clip, [3, 0, 1, 2]).astype('float32')
             clips.append(clip)
             segments.append(
@@ -308,6 +279,17 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
         subset = 'training'
         temporal_transform=[TemporalRandomCrop(16)]
         temporal_transform = TemporalCompose(temporal_transform)
+
+        spatial_transform = []
+        spatial_transform.append(
+            RandomResizedCrop(
+                112, (0.25, 1.0),
+                (0.75, 1.0 / 0.75)))
+        spatial_transform.append(RandomHorizontalFlip())
+        spatial_transform.append(ScaleValue(255.0))
+        spatial_transform.append(Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714]))
+        spatial_transform = Compose(spatial_transform)
+
         video_dataset = VideoDataset(root_path=root_path,
                                      annotation_path=annotation_path,
                                      subset=subset,
@@ -315,11 +297,21 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
                                      mode=mode,
                                      batch_size=batch_size,
                                      video_path_formatter=video_path_formatter,
-                                     temporal_transform=temporal_transform)
+                                     temporal_transform=temporal_transform,
+                                     spatial_transform=spatial_transform)
     elif mode == 'val':
         subset = 'validation'
         temporal_transform=[TemporalEvenCrop(16, 3)]
         temporal_transform = TemporalCompose(temporal_transform)
+
+        spatial_transform = [
+            Resize(112),
+            CenterCrop(112),
+            ScaleValue(255.0),
+            Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714])
+        ]
+        spatial_transform = Compose(spatial_transform)
+
         video_dataset = VideoDatasetMultiClips(root_path=root_path,
                                                annotation_path=annotation_path,
                                                subset=subset,
@@ -327,16 +319,26 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
                                                mode=mode,
                                                batch_size=batch_size // 3,
                                                video_path_formatter=video_path_formatter,
-                                               temporal_transform=temporal_transform)
+                                               temporal_transform=temporal_transform,
+                                               spatial_transform=spatial_transform)
     else:
         subset = 'validation'
         temporal_transform = [SlidingWindow(16, 16)]
         temporal_transform = TemporalCompose(temporal_transform)
+        spatial_transform = [
+            Resize(112),
+            CenterCrop(112),
+            ScaleValue(255.0),
+            Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714])
+        ]
+        spatial_transform = Compose(spatial_transform)
+
         video_dataset = VideoDatasetMultiClips(
             root_path=root_path,
             annotation_path=annotation_path,
             subset=subset,
             temporal_transform=temporal_transform,
+            spatial_transform=spatial_transform,
             video_loader=loader,
             video_path_formatter=video_path_formatter,
             target_type=['video_id', 'segment'],
@@ -349,9 +351,9 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
 
 from mixup import create_mixup_reader
 if __name__ == '__main__':
-    root_path = '/Users/alex/baidu/UCF-101-jpg'
+    root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
     annotation_path = 'ucf101_json/ucf101_01.json'
-    reader = custom_reader(Path(root_path), Path(annotation_path),mode='testing',batch_size=7)
+    reader = custom_reader(Path(root_path), Path(annotation_path),mode='val',batch_size=3)
     # r = create_mixup_reader(0.2, reader)
     for data in reader():
-        pass
+        print('')
