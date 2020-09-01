@@ -94,44 +94,36 @@ if __name__ == '__main__':
             # parameter_list=parameters,
             regularization=L2Decay(1e-3))
 
-        batch_id = 0
-        eval_batch_num = 0
         for epoch in range(1, MAX_EPOCH + 1):
             model.train()
             accs = []
             losses = []
-            start_time = time.time()
             with LogWriter(logdir="./log/train") as writer:
                 for i, data in enumerate(train_data_loader()):
                     img, label = data
                     out = model(img)
                     out = fluid.layers.softmax(out)
                     loss = fluid.layers.cross_entropy(out, label)
-                    avg_loss = fluid.layers.mean(loss)
+                    loss = fluid.layers.reduce_mean(loss)
                     acc = fluid.layers.accuracy(out, label)
 
-                    avg_loss.backward()
-                    opt.minimize(avg_loss)
+                    loss.backward()
+                    opt.minimize(loss)
                     model.clear_gradients()
+
                     accs.append(acc.numpy()[0])
-                    losses.append(avg_loss.numpy()[0])
-                    batch_id += 1
-                    if batch_id % 1 == 0:
-                        per_log_time = time.time() - start_time
-                        start_time = time.time()
-                        remain_time = (iter_per_epoch - i) / 1 * per_log_time
-                        print(f'epoch:{epoch} batch id:{batch_id} '
-                              f'loss:{sum(losses) / len(losses)} acc:{sum(accs) / len(accs)} remain time:{str(datetime.timedelta(seconds=remain_time))}')
+                    losses.append(loss.numpy()[0])
+
+                    print(f'epoch:{epoch} batch id:{i} loss:{sum(losses) / len(losses)} acc:{sum(accs) / len(accs)}')
                 # 向记录器添加一个tag为`acc`的数据
                 writer.add_scalar(tag="train/acc", step=epoch, value=sum(accs) / len(accs))
                 # 向记录器添加一个tag为`loss`的数据
                 writer.add_scalar(tag="train/loss", step=epoch, value=sum(losses) / len(losses))
-
+            accs = []
+            losses = []
             with LogWriter(logdir="./log/eval") as writer:
                 with fluid.dygraph.no_grad():
                     model.eval()
-                    total_acc = 0
-                    total_loss = 0
                     for i, data in enumerate(val_data_loader()):
                         img, label = data
                         out = model(img)
@@ -139,28 +131,31 @@ if __name__ == '__main__':
                         acc = fluid.layers.accuracy(out, label)
                         loss = fluid.layers.cross_entropy(out, label)
                         loss = fluid.layers.mean(x=loss)
-                        total_acc + acc
-                        total_loss += loss
-                        avg_acc = total_acc / (i + 1)
-                        print(f'Test batch id:{i}, acc:{avg_acc.numpy()[0]}')
-                        eval_batch_num += 1
-                        avg_loss = total_loss / (i + 1)
-                        # 向记录器添加一个tag为`acc`的数据
-                    writer.add_scalar(tag="train/acc", step=epoch, value=avg_acc.numpy()[0])
-                    # 向记录器添加一个tag为`loss`的数据
-                    writer.add_scalar(tag="train/loss", step=epoch, value=avg_loss.numpy()[0])
 
-                    print(f'Test acc :{avg_acc.numpy()[0]}, loss:{avg_loss.numpy()[0]}')
+                        accs.append(acc.numpy()[0])
+                        losses.append(loss.numpy()[0])
+
+                        avg_acc = sum(accs) / len(accs)
+                        avg_loss = sum(losses) / len(losses)
+
+                        print(f'Test batch id:{i} acc:{avg_acc} loss:{avg_loss}')
+
+                        # 向记录器添加一个tag为`acc`的数据
+                    writer.add_scalar(tag="train/acc", step=epoch, value=avg_acc)
+                    # 向记录器添加一个tag为`loss`的数据
+                    writer.add_scalar(tag="train/loss", step=epoch, value=avg_loss)
+
+                    print(f'Test acc :{avg_acc}, loss:{avg_loss}')
                     if not os.path.exists('./model_weights'):
                         os.makedirs('./model_weights')
                     with open('./model_weights/eval_log.txt', 'a') as f:
-                        f.write(f'epoch:{epoch} Test acc :{avg_acc.numpy()[0]}, loss:{avg_loss.numpy()[0]}\n')
-                    lr.step(avg_loss)
+                        f.write(f'epoch:{epoch} Test acc :{avg_acc}, loss:{avg_loss}\n')
+                    lr.step(to_variable(np.array([avg_loss]).astype('float32')))
 
                     if avg_acc > best_accuracy:
                         with open('./model_weights/best_accuracy.txt', 'w') as f:
-                            f.write(f'{epoch}:{avg_acc.numpy()[0]}')
-                        best_accuracy = avg_acc.numpy()[0]
+                            f.write(f'{epoch}:{avg_acc}')
+                        best_accuracy = avg_acc
                         fluid.save_dygraph(model.state_dict(), './model_weights/best_accuracy')
                     if epoch % 10 == 0:
                         fluid.save_dygraph(model.state_dict(), f'./model_weights/{epoch}_model')
