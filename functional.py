@@ -1,26 +1,15 @@
-# Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+from __future__ import division
 import sys
-import collections
-import random
 import math
-import functools
-
-import cv2
-import numbers
+from PIL import Image, ImageOps, ImageEnhance, PILLOW_VERSION
+try:
+    import accimage
+except ImportError:
+    accimage = None
 import numpy as np
+import numbers
+import collections
+import warnings
 
 if sys.version_info < (3, 3):
     Sequence = collections.Sequence
@@ -29,261 +18,567 @@ else:
     Sequence = collections.abc.Sequence
     Iterable = collections.abc.Iterable
 
-__all__ = ['flip', 'resize', 'pad', 'rotate', 'to_grayscale']
+
+def _is_pil_image(img):
+    if accimage is not None:
+        return isinstance(img, (Image.Image, accimage.Image))
+    else:
+        return isinstance(img, Image.Image)
 
 
-def keepdims(func):
-    """Keep the dimension of input images unchanged"""
-
-    @functools.wraps(func)
-    def wrapper(image, *args, **kwargs):
-        if len(image.shape) != 3:
-            raise ValueError("Expect image have 3 dims, but got {} dims".format(
-                len(image.shape)))
-        ret = func(image, *args, **kwargs)
-        if len(ret.shape) == 2:
-            ret = ret[:, :, np.newaxis]
-        return ret
-
-    return wrapper
+def _is_tensor_image(img):
+    return False
 
 
-@keepdims
-def flip(image, code):
-    """
-    Accordding to the code (the type of flip), flip the input image
+def _is_numpy_image(img):
+    return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
+
+
+def resize(img, size, interpolation=Image.BILINEAR):
+    r"""Resize the input PIL Image to the given size.
+
     Args:
-        image: Input image, with (H, W, C) shape
-        code: Code that indicates the type of flip.
-            -1 : Flip horizontally and vertically
-            0 : Flip vertically
-            1 : Flip horizontally
-    Examples:
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import functional as F
-            fake_img = np.random.rand(224, 224, 3)
-            # flip horizontally and vertically
-            F.flip(fake_img, -1)
-            # flip vertically
-            F.flip(fake_img, 0)
-            # flip horizontally
-            F.flip(fake_img, 1)
-    """
-    return cv2.flip(image, flipCode=code)
+        img (PIL Image): Image to be resized.
+        size (sequence or int): Desired output size. If size is a sequence like
+            (h, w), the output size will be matched to this. If size is an int,
+            the smaller edge of the image will be matched to this number maintaing
+            the aspect ratio. i.e, if height > width, then image will be rescaled to
+            :math:`\left(\text{size} \times \frac{\text{height}}{\text{width}}, \text{size}\right)`
+        interpolation (int, optional): Desired interpolation. Default is
+            ``PIL.Image.BILINEAR``
 
-
-@keepdims
-def resize(img, size, interpolation=cv2.INTER_LINEAR):
+    Returns:
+        PIL Image: Resized image.
     """
-    resize the input data to given size
-    Args:
-        input: Input data, could be image or masks, with (H, W, C) shape
-        size: Target size of input data, with (height, width) shape.
-        interpolation: Interpolation method.
-    Examples:
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import functional as F
-            fake_img = np.random.rand(256, 256, 3)
-            F.resize(fake_img, 224)
-            F.resize(fake_img, (200, 150))
-    """
-
-    if isinstance(interpolation, Sequence):
-        interpolation = random.choice(interpolation)
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+    if not (isinstance(size, int) or (isinstance(size, Iterable) and len(size) == 2)):
+        raise TypeError('Got inappropriate size arg: {}'.format(size))
 
     if isinstance(size, int):
-        h, w = img.shape[:2]
+        w, h = img.size
         if (w <= h and w == size) or (h <= w and h == size):
             return img
         if w < h:
             ow = size
             oh = int(size * h / w)
-            return cv2.resize(img, (ow, oh), interpolation=interpolation)
+            return img.resize((ow, oh), interpolation)
         else:
             oh = size
             ow = int(size * w / h)
-            return cv2.resize(img, (ow, oh), interpolation=interpolation)
+            return img.resize((ow, oh), interpolation)
     else:
-        return cv2.resize(img, size[::-1], interpolation=interpolation)
+        return img.resize(size[::-1], interpolation)
 
 
-@keepdims
-def pad(img, padding, fill=(0, 0, 0), padding_mode='constant'):
-    """Pads the given CV Image on all sides with speficified padding mode and fill value.
+def scale(*args, **kwargs):
+    warnings.warn("The use of the transforms.Scale transform is deprecated, " +
+                  "please use transforms.Resize instead.")
+    return resize(*args, **kwargs)
+
+
+def pad(img, padding, fill=0, padding_mode='constant'):
+    r"""Pad the given PIL Image on all sides with specified padding mode and fill value.
+
     Args:
-        img (np.ndarray): Image to be padded.
-        padding (int|tuple): Padding on each border. If a single int is provided this
+        img (PIL Image): Image to be padded.
+        padding (int or tuple): Padding on each border. If a single int is provided this
             is used to pad all borders. If tuple of length 2 is provided this is the padding
             on left/right and top/bottom respectively. If a tuple of length 4 is provided
             this is the padding for the left, top, right and bottom borders
             respectively.
-        fill (int|tuple): Pixel fill value for constant fill. Default is 0. If a tuple of
+        fill: Pixel fill value for constant fill. Default is 0. If a tuple of
             length 3, it is used to fill R, G, B channels respectively.
             This value is only used when the padding_mode is constant
         padding_mode: Type of padding. Should be: constant, edge, reflect or symmetric. Default is constant.
-            ``constant`` means padding with a constant value, this value is specified with fill.
-            ``edge`` means padding with the last value at the edge of the image.
-            ``reflect`` means padding with reflection of image (without repeating the last value on the edge)
-            padding ``[1, 2, 3, 4]`` with 2 elements on both sides in reflect mode
-            will result in ``[3, 2, 1, 2, 3, 4, 3, 2]``.
-            ``symmetric`` menas pads with reflection of image (repeating the last value on the edge)
-            padding ``[1, 2, 3, 4]`` with 2 elements on both sides in symmetric mode
-            will result in ``[2, 1, 1, 2, 3, 4, 4, 3]``.
+
+            - constant: pads with a constant value, this value is specified with fill
+
+            - edge: pads with the last value on the edge of the image
+
+            - reflect: pads with reflection of image (without repeating the last value on the edge)
+
+                       padding [1, 2, 3, 4] with 2 elements on both sides in reflect mode
+                       will result in [3, 2, 1, 2, 3, 4, 3, 2]
+
+            - symmetric: pads with reflection of image (repeating the last value on the edge)
+
+                         padding [1, 2, 3, 4] with 2 elements on both sides in symmetric mode
+                         will result in [2, 1, 1, 2, 3, 4, 4, 3]
+
     Returns:
-        numpy ndarray: Padded image.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms.functional import pad
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = pad(fake_img, 2)
-            print(fake_img.shape)
+        PIL Image: Padded image.
     """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
 
-    if not isinstance(padding, (numbers.Number, list, tuple)):
+    if not isinstance(padding, (numbers.Number, tuple)):
         raise TypeError('Got inappropriate padding arg')
-    if not isinstance(fill, (numbers.Number, str, list, tuple)):
+    if not isinstance(fill, (numbers.Number, str, tuple)):
         raise TypeError('Got inappropriate fill arg')
     if not isinstance(padding_mode, str):
         raise TypeError('Got inappropriate padding_mode arg')
 
-    if isinstance(padding, collections.Sequence) and len(padding) not in [2, 4]:
-        raise ValueError(
-            "Padding must be an int or a 2, or 4 element tuple, not a " +
-            "{} element tuple".format(len(padding)))
+    if isinstance(padding, Sequence) and len(padding) not in [2, 4]:
+        raise ValueError("Padding must be an int or a 2, or 4 element tuple, not a " +
+                         "{} element tuple".format(len(padding)))
 
     assert padding_mode in ['constant', 'edge', 'reflect', 'symmetric'], \
-        'Expected padding mode be either constant, edge, reflect or symmetric, but got {}'.format(padding_mode)
-
-    PAD_MOD = {
-        'constant': cv2.BORDER_CONSTANT,
-        'edge': cv2.BORDER_REPLICATE,
-        'reflect': cv2.BORDER_DEFAULT,
-        'symmetric': cv2.BORDER_REFLECT
-    }
-
-    if isinstance(padding, int):
-        pad_left = pad_right = pad_top = pad_bottom = padding
-    if isinstance(padding, collections.Sequence) and len(padding) == 2:
-        pad_left = pad_right = padding[0]
-        pad_top = pad_bottom = padding[1]
-    if isinstance(padding, collections.Sequence) and len(padding) == 4:
-        pad_left, pad_top, pad_right, pad_bottom = padding
-
-    if isinstance(fill, numbers.Number):
-        fill = (fill,) * (2 * len(img.shape) - 3)
+        'Padding mode should be either constant, edge, reflect or symmetric'
 
     if padding_mode == 'constant':
-        assert (len(fill) == 3 and len(img.shape) == 3) or (len(fill) == 1 and len(img.shape) == 2), \
-            'channel of image is {} but length of fill is {}'.format(img.shape[-1], len(fill))
+        if img.mode == 'P':
+            palette = img.getpalette()
+            image = ImageOps.expand(img, border=padding, fill=fill)
+            image.putpalette(palette)
+            return image
 
-    img = cv2.copyMakeBorder(
-        src=img,
-        top=pad_top,
-        bottom=pad_bottom,
-        left=pad_left,
-        right=pad_right,
-        borderType=PAD_MOD[padding_mode],
-        value=fill)
+        return ImageOps.expand(img, border=padding, fill=fill)
+    else:
+        if isinstance(padding, int):
+            pad_left = pad_right = pad_top = pad_bottom = padding
+        if isinstance(padding, Sequence) and len(padding) == 2:
+            pad_left = pad_right = padding[0]
+            pad_top = pad_bottom = padding[1]
+        if isinstance(padding, Sequence) and len(padding) == 4:
+            pad_left = padding[0]
+            pad_top = padding[1]
+            pad_right = padding[2]
+            pad_bottom = padding[3]
 
+        if img.mode == 'P':
+            palette = img.getpalette()
+            img = np.asarray(img)
+            img = np.pad(img, ((pad_top, pad_bottom), (pad_left, pad_right)), padding_mode)
+            img = Image.fromarray(img)
+            img.putpalette(palette)
+            return img
+
+        img = np.asarray(img)
+        # RGB image
+        if len(img.shape) == 3:
+            img = np.pad(img, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), padding_mode)
+        # Grayscale image
+        if len(img.shape) == 2:
+            img = np.pad(img, ((pad_top, pad_bottom), (pad_left, pad_right)), padding_mode)
+
+        return Image.fromarray(img)
+
+
+def crop(img, i, j, h, w):
+    """Crop the given PIL Image.
+
+    Args:
+        img (PIL Image): Image to be cropped.
+        i: Upper pixel coordinate.
+        j: Left pixel coordinate.
+        h: Height of the cropped image.
+        w: Width of the cropped image.
+
+    Returns:
+        PIL Image: Cropped image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    return img.crop((j, i, j + w, i + h))
+
+
+def center_crop(img, output_size):
+    if isinstance(output_size, numbers.Number):
+        output_size = (int(output_size), int(output_size))
+    w, h = img.size
+    th, tw = output_size
+    i = int(round((h - th) / 2.))
+    j = int(round((w - tw) / 2.))
+    return crop(img, i, j, th, tw)
+
+
+def resized_crop(img, i, j, h, w, size, interpolation=Image.BILINEAR):
+    """Crop the given PIL Image and resize it to desired size.
+
+    Notably used in :class:`~torchvision.transforms.RandomResizedCrop`.
+
+    Args:
+        img (PIL Image): Image to be cropped.
+        i: i in (i,j) i.e coordinates of the upper left corner
+        j: j in (i,j) i.e coordinates of the upper left corner
+        h: Height of the cropped image.
+        w: Width of the cropped image.
+        size (sequence or int): Desired output size. Same semantics as ``resize``.
+        interpolation (int, optional): Desired interpolation. Default is
+            ``PIL.Image.BILINEAR``.
+    Returns:
+        PIL Image: Cropped image.
+    """
+    assert _is_pil_image(img), 'img should be PIL Image'
+    img = crop(img, i, j, h, w)
+    img = resize(img, size, interpolation)
     return img
 
 
-@keepdims
-def rotate(img,
-           angle,
-           interpolation=cv2.INTER_LINEAR,
-           expand=False,
-           center=None):
-    """Rotates the image by angle.
+def hflip(img):
+    """Horizontally flip the given PIL Image.
+
     Args:
-        img (numpy.ndarray): Image to be rotated.
-        angle (float|int): In degrees clockwise order.
-        interpolation (int, optional):
-            interpolation: Interpolation method.
-        expand (bool|optional): Optional expansion flag.
+        img (PIL Image): Image to be flipped.
+
+    Returns:
+        PIL Image:  Horizontall flipped image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    return img.transpose(Image.FLIP_LEFT_RIGHT)
+
+
+def vflip(img):
+    """Vertically flip the given PIL Image.
+
+    Args:
+        img (PIL Image): Image to be flipped.
+
+    Returns:
+        PIL Image:  Vertically flipped image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    return img.transpose(Image.FLIP_TOP_BOTTOM)
+
+
+def five_crop(img, size):
+    """Crop the given PIL Image into four corners and the central crop.
+
+    .. Note::
+        This transform returns a tuple of images and there may be a
+        mismatch in the number of inputs and targets your ``Dataset`` returns.
+
+    Args:
+       size (sequence or int): Desired output size of the crop. If size is an
+           int instead of sequence like (h, w), a square crop (size, size) is
+           made.
+
+    Returns:
+       tuple: tuple (tl, tr, bl, br, center)
+                Corresponding top left, top right, bottom left, bottom right and center crop.
+    """
+    if isinstance(size, numbers.Number):
+        size = (int(size), int(size))
+    else:
+        assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+
+    w, h = img.size
+    crop_h, crop_w = size
+    if crop_w > w or crop_h > h:
+        raise ValueError("Requested crop size {} is bigger than input size {}".format(size,
+                                                                                      (h, w)))
+    tl = img.crop((0, 0, crop_w, crop_h))
+    tr = img.crop((w - crop_w, 0, w, crop_h))
+    bl = img.crop((0, h - crop_h, crop_w, h))
+    br = img.crop((w - crop_w, h - crop_h, w, h))
+    center = center_crop(img, (crop_h, crop_w))
+    return (tl, tr, bl, br, center)
+
+
+def ten_crop(img, size, vertical_flip=False):
+    r"""Crop the given PIL Image into four corners and the central crop plus the
+        flipped version of these (horizontal flipping is used by default).
+
+    .. Note::
+        This transform returns a tuple of images and there may be a
+        mismatch in the number of inputs and targets your ``Dataset`` returns.
+
+    Args:
+       size (sequence or int): Desired output size of the crop. If size is an
+            int instead of sequence like (h, w), a square crop (size, size) is
+            made.
+       vertical_flip (bool): Use vertical flipping instead of horizontal
+
+    Returns:
+       tuple: tuple (tl, tr, bl, br, center, tl_flip, tr_flip, bl_flip, br_flip, center_flip)
+                Corresponding top left, top right, bottom left, bottom right and center crop
+                and same for the flipped image.
+    """
+    if isinstance(size, numbers.Number):
+        size = (int(size), int(size))
+    else:
+        assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+
+    first_five = five_crop(img, size)
+
+    if vertical_flip:
+        img = vflip(img)
+    else:
+        img = hflip(img)
+
+    second_five = five_crop(img, size)
+    return first_five + second_five
+
+
+def adjust_brightness(img, brightness_factor):
+    """Adjust brightness of an Image.
+
+    Args:
+        img (PIL Image): PIL Image to be adjusted.
+        brightness_factor (float):  How much to adjust the brightness. Can be
+            any non negative number. 0 gives a black image, 1 gives the
+            original image while 2 increases the brightness by a factor of 2.
+
+    Returns:
+        PIL Image: Brightness adjusted image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    enhancer = ImageEnhance.Brightness(img)
+    img = enhancer.enhance(brightness_factor)
+    return img
+
+
+def adjust_contrast(img, contrast_factor):
+    """Adjust contrast of an Image.
+
+    Args:
+        img (PIL Image): PIL Image to be adjusted.
+        contrast_factor (float): How much to adjust the contrast. Can be any
+            non negative number. 0 gives a solid gray image, 1 gives the
+            original image while 2 increases the contrast by a factor of 2.
+
+    Returns:
+        PIL Image: Contrast adjusted image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    enhancer = ImageEnhance.Contrast(img)
+    img = enhancer.enhance(contrast_factor)
+    return img
+
+
+def adjust_saturation(img, saturation_factor):
+    """Adjust color saturation of an image.
+
+    Args:
+        img (PIL Image): PIL Image to be adjusted.
+        saturation_factor (float):  How much to adjust the saturation. 0 will
+            give a black and white image, 1 will give the original image while
+            2 will enhance the saturation by a factor of 2.
+
+    Returns:
+        PIL Image: Saturation adjusted image.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    enhancer = ImageEnhance.Color(img)
+    img = enhancer.enhance(saturation_factor)
+    return img
+
+
+def adjust_hue(img, hue_factor):
+    """Adjust hue of an image.
+
+    The image hue is adjusted by converting the image to HSV and
+    cyclically shifting the intensities in the hue channel (H).
+    The image is then converted back to original image mode.
+
+    `hue_factor` is the amount of shift in H channel and must be in the
+    interval `[-0.5, 0.5]`.
+
+    See `Hue`_ for more details.
+
+    .. _Hue: https://en.wikipedia.org/wiki/Hue
+
+    Args:
+        img (PIL Image): PIL Image to be adjusted.
+        hue_factor (float):  How much to shift the hue channel. Should be in
+            [-0.5, 0.5]. 0.5 and -0.5 give complete reversal of hue channel in
+            HSV space in positive and negative direction respectively.
+            0 means no shift. Therefore, both -0.5 and 0.5 will give an image
+            with complementary colors while 0 gives the original image.
+
+    Returns:
+        PIL Image: Hue adjusted image.
+    """
+    if not(-0.5 <= hue_factor <= 0.5):
+        raise ValueError('hue_factor is not in [-0.5, 0.5].'.format(hue_factor))
+
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    input_mode = img.mode
+    if input_mode in {'L', '1', 'I', 'F'}:
+        return img
+
+    h, s, v = img.convert('HSV').split()
+
+    np_h = np.array(h, dtype=np.uint8)
+    # uint8 addition take cares of rotation across boundaries
+    with np.errstate(over='ignore'):
+        np_h += np.uint8(hue_factor * 255)
+    h = Image.fromarray(np_h, 'L')
+
+    img = Image.merge('HSV', (h, s, v)).convert(input_mode)
+    return img
+
+
+def adjust_gamma(img, gamma, gain=1):
+    r"""Perform gamma correction on an image.
+
+    Also known as Power Law Transform. Intensities in RGB mode are adjusted
+    based on the following equation:
+
+    .. math::
+        I_{\text{out}} = 255 \times \text{gain} \times \left(\frac{I_{\text{in}}}{255}\right)^{\gamma}
+
+    See `Gamma Correction`_ for more details.
+
+    .. _Gamma Correction: https://en.wikipedia.org/wiki/Gamma_correction
+
+    Args:
+        img (PIL Image): PIL Image to be adjusted.
+        gamma (float): Non negative real number, same as :math:`\gamma` in the equation.
+            gamma larger than 1 make the shadows darker,
+            while gamma smaller than 1 make dark regions lighter.
+        gain (float): The constant multiplier.
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    if gamma < 0:
+        raise ValueError('Gamma should be a non-negative real number')
+
+    input_mode = img.mode
+    img = img.convert('RGB')
+
+    gamma_map = [255 * gain * pow(ele / 255., gamma) for ele in range(256)] * 3
+    img = img.point(gamma_map)  # use PIL's point-function to accelerate this part
+
+    img = img.convert(input_mode)
+    return img
+
+
+def rotate(img, angle, resample=False, expand=False, center=None):
+    """Rotate the image by angle.
+
+
+    Args:
+        img (PIL Image): PIL Image to be rotated.
+        angle (float or int): In degrees degrees counter clockwise order.
+        resample (``PIL.Image.NEAREST`` or ``PIL.Image.BILINEAR`` or ``PIL.Image.BICUBIC``, optional):
+            An optional resampling filter. See `filters`_ for more information.
+            If omitted, or if the image has mode "1" or "P", it is set to ``PIL.Image.NEAREST``.
+        expand (bool, optional): Optional expansion flag.
             If true, expands the output image to make it large enough to hold the entire rotated image.
             If false or omitted, make the output image the same size as the input image.
             Note that the expand flag assumes rotation around the center and no translation.
-        center (2-tuple|optional): Optional center of rotation.
+        center (2-tuple, optional): Optional center of rotation.
             Origin is the upper left corner.
             Default is the center of the image.
-    Returns:
-        numpy ndarray: Rotated image.
-    Examples:
 
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms.functional import rotate
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = rotate(fake_img, 10)
-            print(fake_img.shape)
+    .. _filters: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#filters
+
     """
-    dtype = img.dtype
 
-    h, w, _ = img.shape
-    point = center or (w / 2, h / 2)
-    M = cv2.getRotationMatrix2D(point, angle=-angle, scale=1)
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
 
-    if expand:
-        if center is None:
-            cos = np.abs(M[0, 0])
-            sin = np.abs(M[0, 1])
-
-            nW = int((h * sin) + (w * cos))
-            nH = int((h * cos) + (w * sin))
-
-            M[0, 2] += (nW / 2) - point[0]
-            M[1, 2] += (nH / 2) - point[1]
-
-            dst = cv2.warpAffine(img, M, (nW, nH))
-        else:
-            xx = []
-            yy = []
-            for point in (np.array([0, 0, 1]), np.array([w - 1, 0, 1]),
-                          np.array([w - 1, h - 1, 1]), np.array([0, h - 1, 1])):
-                target = np.dot(M, point)
-                xx.append(target[0])
-                yy.append(target[1])
-            nh = int(math.ceil(max(yy)) - math.floor(min(yy)))
-            nw = int(math.ceil(max(xx)) - math.floor(min(xx)))
-
-            M[0, 2] += (nw - w) / 2
-            M[1, 2] += (nh - h) / 2
-            dst = cv2.warpAffine(img, M, (nw, nh), flags=interpolation)
-    else:
-        dst = cv2.warpAffine(img, M, (w, h), flags=interpolation)
-    return dst.astype(dtype)
+    return img.rotate(angle, resample, expand, center)
 
 
-@keepdims
-def to_grayscale(img, num_output_channels=1):
-    """Converts image to grayscale version of image.
+def _get_inverse_affine_matrix(center, angle, translate, scale, shear):
+    # Helper method to compute inverse matrix for affine transformation
+
+    # As it is explained in PIL.Image.rotate
+    # We need compute INVERSE of affine transformation matrix: M = T * C * RSS * C^-1
+    # where T is translation matrix: [1, 0, tx | 0, 1, ty | 0, 0, 1]
+    #       C is translation matrix to keep center: [1, 0, cx | 0, 1, cy | 0, 0, 1]
+    #       RSS is rotation with scale and shear matrix
+    #       RSS(a, scale, shear) = [ cos(a)*scale    -sin(a + shear)*scale     0]
+    #                              [ sin(a)*scale    cos(a + shear)*scale     0]
+    #                              [     0                  0          1]
+    # Thus, the inverse is M^-1 = C * RSS^-1 * C^-1 * T^-1
+
+    angle = math.radians(angle)
+    shear = math.radians(shear)
+    scale = 1.0 / scale
+
+    # Inverted rotation matrix with scale and shear
+    d = math.cos(angle + shear) * math.cos(angle) + math.sin(angle + shear) * math.sin(angle)
+    matrix = [
+        math.cos(angle + shear), math.sin(angle + shear), 0,
+        -math.sin(angle), math.cos(angle), 0
+    ]
+    matrix = [scale / d * m for m in matrix]
+
+    # Apply inverse of translation and of center translation: RSS^-1 * C^-1 * T^-1
+    matrix[2] += matrix[0] * (-center[0] - translate[0]) + matrix[1] * (-center[1] - translate[1])
+    matrix[5] += matrix[3] * (-center[0] - translate[0]) + matrix[4] * (-center[1] - translate[1])
+
+    # Apply center translation: C * RSS^-1 * C^-1 * T^-1
+    matrix[2] += center[0]
+    matrix[5] += center[1]
+    return matrix
+
+
+def affine(img, angle, translate, scale, shear, resample=0, fillcolor=None):
+    """Apply affine transformation on the image keeping image center invariant
+
     Args:
-        img (numpy.ndarray): Image to be converted to grayscale.
-    Returns:
-        numpy.ndarray:  Grayscale version of the image.
-                        if num_output_channels == 1, returned image is single channel
-                        if num_output_channels == 3, returned image is 3 channel with r == g == b
-
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms.functional import to_grayscale
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = to_grayscale(fake_img)
-            print(fake_img.shape)
+        img (PIL Image): PIL Image to be rotated.
+        angle (float or int): rotation angle in degrees between -180 and 180, clockwise direction.
+        translate (list or tuple of integers): horizontal and vertical translations (post-rotation translation)
+        scale (float): overall scale
+        shear (float): shear angle value in degrees between -180 to 180, clockwise direction.
+        resample (``PIL.Image.NEAREST`` or ``PIL.Image.BILINEAR`` or ``PIL.Image.BICUBIC``, optional):
+            An optional resampling filter.
+            See `filters`_ for more information.
+            If omitted, or if the image has mode "1" or "P", it is set to ``PIL.Image.NEAREST``.
+        fillcolor (int): Optional fill color for the area outside the transform in the output image. (Pillow>=5.0.0)
     """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
+
+    assert isinstance(translate, (tuple, list)) and len(translate) == 2, \
+        "Argument translate should be a list or tuple of length 2"
+
+    assert scale > 0.0, "Argument scale should be positive"
+
+    output_size = img.size
+    center = (img.size[0] * 0.5 + 0.5, img.size[1] * 0.5 + 0.5)
+    matrix = _get_inverse_affine_matrix(center, angle, translate, scale, shear)
+    kwargs = {"fillcolor": fillcolor} if PILLOW_VERSION[0] == '5' else {}
+    return img.transform(output_size, Image.AFFINE, matrix, resample, **kwargs)
+def normalize(img, mean, std):
+    if _is_pil_image(img):
+        img = np.array(img)
+    img = img - np.array(mean).reshape([1,1,3])
+    img = img / np.array(std).reshape([1,1,3])
+    return img
+
+def to_grayscale(img, num_output_channels=1):
+    """Convert image to grayscale version of image.
+
+    Args:
+        img (PIL Image): Image to be converted to grayscale.
+
+    Returns:
+        PIL Image: Grayscale version of the image.
+            if num_output_channels = 1 : returned image is single channel
+
+            if num_output_channels = 3 : returned image is 3 channel with r = g = b
+    """
+    if not _is_pil_image(img):
+        raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
 
     if num_output_channels == 1:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img = img.convert('L')
     elif num_output_channels == 3:
-        img = cv2.cvtColor(
-            cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), cv2.COLOR_GRAY2RGB)
+        img = img.convert('L')
+        np_img = np.array(img, dtype=np.uint8)
+        np_img = np.dstack([np_img, np_img, np_img])
+        img = Image.fromarray(np_img, 'RGB')
     else:
         raise ValueError('num_output_channels should be either 1 or 3')
 

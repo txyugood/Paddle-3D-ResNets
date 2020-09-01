@@ -2,8 +2,8 @@ import random
 
 import transforms
 import functional as F
-import numpy as np
 from PIL import Image
+import numpy as np
 
 
 class Compose(transforms.Compose):
@@ -11,12 +11,6 @@ class Compose(transforms.Compose):
     def randomize_parameters(self):
         for t in self.transforms:
             t.randomize_parameters()
-
-
-# class ToTensor(transforms.ToTensor):
-#
-#     def randomize_parameters(self):
-#         pass
 
 
 class Normalize(transforms.Normalize):
@@ -30,10 +24,11 @@ class ScaleValue(object):
     def __init__(self, s):
         self.s = s
 
-    def __call__(self, tensor):
-        tensor = np.true_divide(tensor,[self.s])
-
-        return tensor
+    def __call__(self, img):
+        if F._is_pil_image(img):
+            img = np.array(img)
+        img = np.true_divide(img, np.array([self.s]).astype('float32'))
+        return img
 
     def randomize_parameters(self):
         pass
@@ -45,10 +40,10 @@ class Resize(transforms.Resize):
         pass
 
 
-# class Scale(transforms.Scale):
-#
-#     def randomize_parameters(self):
-#         pass
+class Scale(transforms.Scale):
+
+    def randomize_parameters(self):
+        pass
 
 
 class CenterCrop(transforms.CenterCrop):
@@ -111,8 +106,8 @@ class CornerCrop(object):
 
 class RandomHorizontalFlip(transforms.RandomHorizontalFlip):
 
-    def __init__(self, prob=0.5):
-        super().__init__(prob)
+    def __init__(self, p=0.5):
+        super().__init__(p)
         self.randomize_parameters()
 
     def __call__(self, img):
@@ -122,8 +117,8 @@ class RandomHorizontalFlip(transforms.RandomHorizontalFlip):
         Returns:
             PIL.Image: Randomly flipped image.
         """
-        if self.random_p < self.prob:
-            return F.flip(img,code=1)
+        if self.random_p < self.p:
+            return F.hflip(img)
         return img
 
     def randomize_parameters(self):
@@ -177,11 +172,11 @@ class RandomResizedCrop(transforms.RandomResizedCrop):
 
     def __call__(self, img):
         if self.randomize:
-            self.random_crop = self._get_params(img)
+            self.random_crop = self.get_params(img, self.scale, self.ratio)
             self.randomize = False
-        x, y, w, h = self.random_crop
-        cropped_img = img[y:y + h, x:x + w]
-        return F.resize(cropped_img, self.output_size, self.interpolation)
+
+        i, j, h, w = self.random_crop
+        return F.resized_crop(img, i, j, h, w, self.size, self.interpolation)
 
     def randomize_parameters(self):
         self.randomize = True

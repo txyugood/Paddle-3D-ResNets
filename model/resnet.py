@@ -5,6 +5,7 @@ from functools import partial
 # import torch.nn as nn
 # import torch.nn.functional as F
 from paddle import fluid
+from paddle.fluid.layer_helper import LayerHelper
 from paddle.fluid.dygraph import Conv3D, BatchNorm, Linear, to_variable
 
 def get_inplanes():
@@ -74,8 +75,7 @@ class BasicBlock(fluid.dygraph.Layer):
         super().__init__()
 
         self.conv1 = conv3x3x3(in_planes, planes, stride)
-        self.bn1 = BatchNorm(planes)
-        self.relu = ReLU()
+        self.bn1 = BatchNorm(planes, act='relu')
         self.conv2 = conv3x3x3(planes, planes)
         self.bn2 = BatchNorm(planes)
         self.downsample = downsample
@@ -86,7 +86,6 @@ class BasicBlock(fluid.dygraph.Layer):
 
         out = self.conv1(x)
         out = self.bn1(out)
-        out = self.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
@@ -107,12 +106,11 @@ class Bottleneck(fluid.dygraph.Layer):
         super().__init__()
 
         self.conv1 = conv1x1x1(in_planes, planes)
-        self.bn1 = BatchNorm(planes)
+        self.bn1 = BatchNorm(planes, act='relu')
         self.conv2 = conv3x3x3(planes, planes, stride)
-        self.bn2 = BatchNorm(planes)
+        self.bn2 = BatchNorm(planes, act='relu')
         self.conv3 = conv1x1x1(planes, planes * self.expansion)
         self.bn3 = BatchNorm(planes * self.expansion)
-        self.relu = ReLU()
         self.downsample = downsample
         self.stride = stride
 
@@ -121,11 +119,9 @@ class Bottleneck(fluid.dygraph.Layer):
 
         out = self.conv1(x)
         out = self.bn1(out)
-        out = self.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = self.relu(out)
 
         out = self.conv3(out)
         out = self.bn3(out)
@@ -134,9 +130,9 @@ class Bottleneck(fluid.dygraph.Layer):
             residual = self.downsample(x)
 
         out += residual
-        out = self.relu(out)
+        layer_helper = LayerHelper(self.full_name(), act='relu')
+        return layer_helper.append_activation(out)
 
-        return out
 
 
 class ResNet(fluid.dygraph.Layer):
@@ -165,8 +161,7 @@ class ResNet(fluid.dygraph.Layer):
                                stride=(conv1_t_stride, 2, 2),
                                padding=(conv1_t_size // 2, 3, 3),
                                bias_attr=False)
-        self.bn1 = BatchNorm(self.in_planes)
-        self.relu = ReLU()
+        self.bn1 = BatchNorm(self.in_planes, act='relu')
         self.maxpool = MaxPool3d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, block_inplanes[0], layers[0],
                                        shortcut_type)
@@ -200,7 +195,7 @@ class ResNet(fluid.dygraph.Layer):
         #         nn.init.constant_(m.bias, 0)
 
     def _downsample_basic_block(self, x, planes, stride):
-        out = fluid.layers.pool3d(x, pool_size=1, pool_stride=1, pool_type='avg')
+        out = fluid.layers.pool3d(x, pool_size=1, pool_stride=stride, pool_type='avg')
         # zero_pads = torch.zeros(out.size(0), planes - out.size(1), out.size(2),
         #                         out.size(3), out.size(4))
         shape = out.shape
@@ -242,7 +237,6 @@ class ResNet(fluid.dygraph.Layer):
     def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
-        x = self.relu(x)
         if not self.no_max_pool:
             x = self.maxpool(x)
 
@@ -292,14 +286,49 @@ if __name__ == '__main__':
     use_gpu = False
     place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
     with fluid.dygraph.guard(place):
-        model = ResNet(Bottleneck, [3, 4, 6, 3], get_inplanes(), n_classes=700)
-        state_dic,_ = fluid.dygraph.load_dygraph('paddle_r3d_700.pdparams')
+
+
+
+        model = ResNet(Bottleneck, [3, 4, 6, 3], get_inplanes(), n_classes=1039)
+        model.train()
+        state_dic,_ = fluid.dygraph.load_dygraph('../paddle_resnet50_mk.pdparams')
         model.set_dict(state_dic)
+        count = 0
+        with open('train_params.txt', 'w') as f:
+            for p in model.named_parameters():
+                f.write(p[0] + '\n')
+
+        params_list = []
+        for k,v in model.named_parameters():
+            if '_mean' not in k and '_variance' not in k:
+                params_list.append(v)
+
+        opt = fluid.optimizer.SGD(
+            learning_rate=3e-4,
+            # momentum=0.0,
+            parameter_list=model.parameters(),
+            # parameter_list=parameters,
+            #regularization=fluid.regularizer.L2Decay(0)
+        )
+
         # data = np.random.uniform(0,1, size=(1,3,32,224,224)).astype('float32')
         # np.save('data.npy',data)
-        data = np.load('data.npy')
-        data = to_variable(data)
-        y = model(data)
-        y = fluid.layers.softmax(y)
-        y = fluid.layers.cross_entropy(y,to_variable(np.array([[1]])))
+        for i in range(20):
+
+            data = np.load('data.npy')
+            data = data[:,:,:1,:,:]
+            data = to_variable(data)
+            label = to_variable(np.array([[1]]))
+            label.stop_gradient = True
+            data.stop_gradient = True
+            y = model(data)
+            y = fluid.layers.softmax(y)
+            loss = fluid.layers.cross_entropy(y, label)
+            loss = fluid.layers.mean(loss)
+            print(f'epoch:{i} loss:{loss.numpy()}')
+            np.save(f'loss_{i}.npy', loss.numpy()[0])
+            # print(f'epoch:{i} y:{y_mean.numpy()}')
+            loss.backward()
+            opt.minimize(loss)
+            model.clear_gradients()
         pass

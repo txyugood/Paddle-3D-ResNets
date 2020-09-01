@@ -1,30 +1,17 @@
-# Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import division
-
 import math
 import sys
 import random
-import cv2
-
+from PIL import Image
+try:
+    import accimage
+except ImportError:
+    accimage = None
 import numpy as np
 import numbers
 import types
 import collections
 import warnings
-import traceback
 
 import functional as F
 
@@ -35,70 +22,42 @@ else:
     Sequence = collections.abc.Sequence
     Iterable = collections.abc.Iterable
 
-__all__ = [
-    "Compose",
-    "BatchCompose",
-    "Resize",
-    "RandomResizedCrop",
-    "CenterCropResize",
-    "CenterCrop",
-    "RandomHorizontalFlip",
-    "RandomVerticalFlip",
-    "Permute",
-    "Normalize",
-    "GaussianNoise",
-    "BrightnessTransform",
-    "SaturationTransform",
-    "ContrastTransform",
-    "HueTransform",
-    "ColorJitter",
-    "RandomCrop",
-    "RandomErasing",
-    "Pad",
-    "RandomRotate",
-    "Grayscale",
-]
+
+__all__ = ["Compose", "ToPILImage", "Normalize", "Resize", "Scale", "CenterCrop", "Pad",
+           "Lambda", "RandomApply", "RandomChoice", "RandomOrder", "RandomCrop", "RandomHorizontalFlip",
+           "RandomVerticalFlip", "RandomResizedCrop", "RandomSizedCrop", "FiveCrop", "TenCrop", "LinearTransformation",
+           "ColorJitter", "RandomRotation", "RandomAffine", "Grayscale", "RandomGrayscale"]
+
+_pil_interpolation_to_str = {
+    Image.NEAREST: 'PIL.Image.NEAREST',
+    Image.BILINEAR: 'PIL.Image.BILINEAR',
+    Image.BICUBIC: 'PIL.Image.BICUBIC',
+    Image.LANCZOS: 'PIL.Image.LANCZOS',
+    Image.HAMMING: 'PIL.Image.HAMMING',
+    Image.BOX: 'PIL.Image.BOX',
+}
 
 
 class Compose(object):
-    """
-    Composes several transforms together use for composing list of transforms
-    together for a dataset transform.
-    Args:
-        transforms (list): List of transforms to compose.
-    Returns:
-        A compose object which is callable, __call__ for this Compose
-        object will call each given :attr:`transforms` sequencely.
-    Examples:
+    """Composes several transforms together.
 
-        .. code-block:: python
-            from paddle.incubate.hapi.datasets import Flowers
-            from paddle.incubate.hapi.vision.transforms import Compose, ColorJitter, Resize
-            transform = Compose([ColorJitter(), Resize(size=608)])
-            flowers = Flowers(mode='test', transform=transform)
-            for i in range(10):
-                sample = flowers[i]
-                print(sample[0].shape, sample[1])
+    Args:
+        transforms (list of ``Transform`` objects): list of transforms to compose.
+
+    Example:
+        >>> transforms.Compose([
+        >>>     transforms.CenterCrop(10),
+        >>>     transforms.ToTensor(),
+        >>> ])
     """
 
     def __init__(self, transforms):
         self.transforms = transforms
 
-    def __call__(self, *data):
-        for f in self.transforms:
-            try:
-                # multi-fileds in a sample
-                if isinstance(data, Sequence):
-                    data = f(*data)
-                # single field in a sample, call transform directly
-                else:
-                    data = f(data)
-            except Exception as e:
-                stack_info = traceback.format_exc()
-                print("fail to perform transform [{}] with error: "
-                      "{} and stack:\n{}".format(f, e, str(stack_info)))
-                raise e
-        return data
+    def __call__(self, img):
+        for t in self.transforms:
+            img = t(img)
+        return img
 
     def __repr__(self):
         format_string = self.__class__.__name__ + '('
@@ -109,773 +68,187 @@ class Compose(object):
         return format_string
 
 
-class BatchCompose(object):
-    """Composes several batch transforms together
-    Args:
-        transforms (list): List of transforms to compose.
-                           these transforms perform on batch data.
-    Examples:
+class ToPILImage(object):
+    """Convert a tensor or an ndarray to PIL Image.
 
-        .. code-block:: python
-            import numpy as np
-            from paddle.io import DataLoader
-            from paddle.incubate.hapi import set_device
-            from paddle.incubate.hapi.datasets import Flowers
-            from paddle.incubate.hapi.vision.transforms import Compose, BatchCompose, Resize
-            class NormalizeBatch(object):
-                def __init__(self,
-                            mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225],
-                            scale=True,
-                            channel_first=True):
-                    self.mean = mean
-                    self.std = std
-                    self.scale = scale
-                    self.channel_first = channel_first
-                    if not (isinstance(self.mean, list) and isinstance(self.std, list) and
-                            isinstance(self.scale, bool)):
-                        raise TypeError("{}: input type is invalid.".format(self))
-                    from functools import reduce
-                    if reduce(lambda x, y: x * y, self.std) == 0:
-                        raise ValueError('{}: std is invalid!'.format(self))
-                def __call__(self, samples):
-                    for i in range(len(samples)):
-                        samples[i] = list(samples[i])
-                        im = samples[i][0]
-                        im = im.astype(np.float32, copy=False)
-                        mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
-                        std = np.array(self.std)[np.newaxis, np.newaxis, :]
-                        if self.scale:
-                            im = im / 255.0
-                        im -= mean
-                        im /= std
-                        if self.channel_first:
-                            im = im.transpose((2, 0, 1))
-                        samples[i][0] = im
-                    return samples
-            transform = Compose([Resize((500, 500))])
-            flowers_dataset = Flowers(mode='test', transform=transform)
-            device = set_device('cpu')
-            collate_fn = BatchCompose([NormalizeBatch()])
-            loader = DataLoader(
-                        flowers_dataset,
-                        batch_size=4,
-                        places=device,
-                        return_list=True,
-                        collate_fn=collate_fn)
-            for data in loader:
-                # do something
-                break
+    Converts a torch.*Tensor of shape C x H x W or a numpy ndarray of shape
+    H x W x C to a PIL Image while preserving the value range.
+
+    Args:
+        mode (`PIL.Image mode`_): color space and pixel depth of input data (optional).
+            If ``mode`` is ``None`` (default) there are some assumptions made about the input data:
+             - If the input has 4 channels, the ``mode`` is assumed to be ``RGBA``.
+             - If the input has 3 channels, the ``mode`` is assumed to be ``RGB``.
+             - If the input has 2 channels, the ``mode`` is assumed to be ``LA``.
+             - If the input has 1 channel, the ``mode`` is determined by the data type (i.e ``int``, ``float``,
+              ``short``).
+
+    .. _PIL.Image mode: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#concept-modes
+    """
+    def __init__(self, mode=None):
+        self.mode = mode
+
+    def __call__(self, pic):
+        """
+        Args:
+            pic (Tensor or numpy.ndarray): Image to be converted to PIL Image.
+
+        Returns:
+            PIL Image: Image converted to PIL Image.
+
+        """
+        return F.to_pil_image(pic, self.mode)
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        if self.mode is not None:
+            format_string += 'mode={0}'.format(self.mode)
+        format_string += ')'
+        return format_string
+
+
+class Normalize(object):
+    """Normalize a tensor image with mean and standard deviation.
+    Given mean: ``(M1,...,Mn)`` and std: ``(S1,..,Sn)`` for ``n`` channels, this transform
+    will normalize each channel of the input ``torch.*Tensor`` i.e.
+    ``input[channel] = (input[channel] - mean[channel]) / std[channel]``
+
+    .. note::
+        This transform acts out of place, i.e., it does not mutates the input tensor.
+
+    Args:
+        mean (sequence): Sequence of means for each channel.
+        std (sequence): Sequence of standard deviations for each channel.
     """
 
-    def __init__(self, transforms=[]):
-        self.transforms = transforms
+    def __init__(self, mean, std, inplace=False):
+        self.mean = mean
+        self.std = std
+        self.inplace = inplace
 
-    def __call__(self, data):
-        for f in self.transforms:
-            try:
-                data = f(data)
-            except Exception as e:
-                stack_info = traceback.format_exc()
-                print("fail to perform batch transform [{}] with error: "
-                      "{} and stack:\n{}".format(f, e, str(stack_info)))
-                raise e
+    def __call__(self, tensor):
+        """
+        Args:
+            tensor (Tensor): Tensor image of size (C, H, W) to be normalized.
 
-        # sample list to batch data
-        batch = list(zip(*data))
+        Returns:
+            Tensor: Normalized Tensor image.
+        """
+        return F.normalize(tensor, self.mean, self.std)
 
-        return batch
+    def __repr__(self):
+        return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
 
 
 class Resize(object):
-    """Resize the input Image to the given size.
+    """Resize the input PIL Image to the given size.
+
     Args:
-        size (int|list|tuple): Desired output size. If size is a sequence like
+        size (sequence or int): Desired output size. If size is a sequence like
             (h, w), output size will be matched to this. If size is an int,
             smaller edge of the image will be matched to this number.
             i.e, if height > width, then image will be rescaled to
             (size * height / width, size)
-        interpolation (int): Interpolation mode of resize. Default: cv2.INTER_LINEAR.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import Resize
-            transform = Resize(size=224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+        interpolation (int, optional): Desired interpolation. Default is
+            ``PIL.Image.BILINEAR``
     """
 
-    def __init__(self, size, interpolation=cv2.INTER_LINEAR):
-        assert isinstance(size, int) or (isinstance(size, Iterable) and
-                                         len(size) == 2)
+    def __init__(self, size, interpolation=Image.BILINEAR):
+        assert isinstance(size, int) or (isinstance(size, Iterable) and len(size) == 2)
         self.size = size
         self.interpolation = interpolation
 
     def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be scaled.
+
+        Returns:
+            PIL Image: Rescaled image.
+        """
         return F.resize(img, self.size, self.interpolation)
 
+    def __repr__(self):
+        interpolate_str = _pil_interpolation_to_str[self.interpolation]
+        return self.__class__.__name__ + '(size={0}, interpolation={1})'.format(self.size, interpolate_str)
 
-class RandomResizedCrop(object):
-    """Crop the input data to random size and aspect ratio.
-    A crop of random size (default: of 0.08 to 1.0) of the original size and a random
-    aspect ratio (default: of 3/4 to 1.33) of the original aspect ratio is made.
-    After applying crop transfrom, the input data will be resized to given size.
-    Args:
-        output_size (int|list|tuple): Target size of output image, with (height, width) shape.
-        scale (list|tuple): Range of size of the origin size cropped. Default: (0.08, 1.0)
-        ratio (list|tuple): Range of aspect ratio of the origin aspect ratio cropped. Default: (0.75, 1.33)
-    Examples:
 
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import RandomResizedCrop
-            transform = RandomResizedCrop(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+class Scale(Resize):
     """
-
-    def __init__(self,
-                 output_size,
-                 scale=(0.08, 1.0),
-                 ratio=(3. / 4, 4. / 3),
-                 interpolation=cv2.INTER_LINEAR):
-        if isinstance(output_size, int):
-            self.output_size = (output_size, output_size)
-        else:
-            self.output_size = output_size
-        assert (scale[0] <= scale[1]), "scale should be of kind (min, max)"
-        assert (ratio[0] <= ratio[1]), "ratio should be of kind (min, max)"
-        self.scale = scale
-        self.ratio = ratio
-        self.interpolation = interpolation
-
-    def _get_params(self, image, attempts=10):
-        height, width, _ = image.shape
-        area = height * width
-
-        for _ in range(attempts):
-            target_area = np.random.uniform(*self.scale) * area
-            log_ratio = tuple(math.log(x) for x in self.ratio)
-            aspect_ratio = math.exp(np.random.uniform(*log_ratio))
-
-            w = int(round(math.sqrt(target_area * aspect_ratio)))
-            h = int(round(math.sqrt(target_area / aspect_ratio)))
-
-            if 0 < w <= width and 0 < h <= height:
-                x = np.random.randint(0, width - w + 1)
-                y = np.random.randint(0, height - h + 1)
-                return x, y, w, h
-
-        # Fallback to central crop
-        in_ratio = float(width) / float(height)
-        if in_ratio < min(self.ratio):
-            w = width
-            h = int(round(w / min(self.ratio)))
-        elif in_ratio > max(self.ratio):
-            h = height
-            w = int(round(h * max(self.ratio)))
-        else:  # whole image
-            w = width
-            h = height
-        x = (width - w) // 2
-        y = (height - h) // 2
-        return x, y, w, h
-
-    def __call__(self, img):
-        x, y, w, h = self._get_params(img)
-        cropped_img = img[y:y + h, x:x + w]
-        return F.resize(cropped_img, self.output_size, self.interpolation)
-
-
-class CenterCropResize(object):
-    """Crops to center of image with padding then scales size.
-    Args:
-        size (int|list|tuple): Target size of output image, with (height, width) shape.
-        crop_padding (int): Center crop with the padding. Default: 32.
-        interpolation (int): Interpolation mode of resize. Default: cv2.INTER_LINEAR.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import CenterCropResize
-            transform = CenterCropResize(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+    Note: This transform is deprecated in favor of Resize.
     """
-
-    def __init__(self, size, crop_padding=32, interpolation=cv2.INTER_LINEAR):
-        if isinstance(size, int):
-            self.size = (size, size)
-        else:
-            self.size = size
-        self.crop_padding = crop_padding
-        self.interpolation = interpolation
-
-    def _get_params(self, img):
-        h, w = img.shape[:2]
-        size = min(self.size)
-        c = int(size / (size + self.crop_padding) * min((h, w)))
-        x = (h + 1 - c) // 2
-        y = (w + 1 - c) // 2
-        return c, x, y
-
-    def __call__(self, img):
-        c, x, y = self._get_params(img)
-        cropped_img = img[x:x + c, y:y + c, :]
-        return F.resize(cropped_img, self.size, self.interpolation)
+    def __init__(self, *args, **kwargs):
+        warnings.warn("The use of the transforms.Scale transform is deprecated, " +
+                      "please use transforms.Resize instead.")
+        super(Scale, self).__init__(*args, **kwargs)
 
 
 class CenterCrop(object):
-    """Crops the given the input data at the center.
+    """Crops the given PIL Image at the center.
+
     Args:
-        output_size: Target size of output image, with (height, width) shape.
-
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import CenterCrop
-            transform = CenterCrop(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, output_size):
-        if isinstance(output_size, int):
-            self.output_size = (output_size, output_size)
-        else:
-            self.output_size = output_size
-
-    def _get_params(self, img):
-        th, tw = self.output_size
-        h, w, _ = img.shape
-        assert th <= h and tw <= w, "output size is bigger than image size"
-        x = int(round((w - tw) / 2.0))
-        y = int(round((h - th) / 2.0))
-        return x, y
-
-    def __call__(self, img):
-        x, y = self._get_params(img)
-        th, tw = self.output_size
-        return img[y:y + th, x:x + tw]
-
-
-class RandomHorizontalFlip(object):
-    """Horizontally flip the input data randomly with a given probability.
-    Args:
-        prob (float): Probability of the input data being flipped. Default: 0.5
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import RandomHorizontalFlip
-            transform = RandomHorizontalFlip(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, prob=0.5):
-        self.prob = prob
-
-    def __call__(self, img):
-        if np.random.random() < self.prob:
-            return F.flip(img, code=1)
-        return img
-
-
-class RandomVerticalFlip(object):
-    """Vertically flip the input data randomly with a given probability.
-    Args:
-        prob (float): Probability of the input data being flipped. Default: 0.5
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import RandomVerticalFlip
-            transform = RandomVerticalFlip(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, prob=0.5):
-        self.prob = prob
-
-    def __call__(self, img):
-        if np.random.random() < self.prob:
-            return F.flip(img, code=0)
-        return img
-
-
-class Normalize(object):
-    """Normalize the input data with mean and standard deviation.
-    Given mean: ``(M1,...,Mn)`` and std: ``(S1,..,Sn)`` for ``n`` channels,
-    this transform will normalize each channel of the input data.
-    ``output[channel] = (input[channel] - mean[channel]) / std[channel]``
-    Args:
-        mean (int|float|list): Sequence of means for each channel.
-        std (int|float|list): Sequence of standard deviations for each channel.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import Normalize
-            normalize = Normalize(mean=[0.5, 0.5, 0.5],
-                                std=[0.5, 0.5, 0.5])
-            fake_img = np.random.rand(3, 500, 500).astype('float32')
-            fake_img = normalize(fake_img)
-            print(fake_img.shape)
-
-    """
-
-    def __init__(self, mean=0.0, std=1.0):
-        if isinstance(mean, numbers.Number):
-            mean = [mean, mean, mean]
-
-        if isinstance(std, numbers.Number):
-            std = [std, std, std]
-
-        self.mean = np.array(mean, dtype=np.float32).reshape(1, 1, len(mean))
-        self.std = np.array(std, dtype=np.float32).reshape(1, 1,len(std))
-
-    def __call__(self, img):
-        return (img - self.mean) / self.std
-
-
-class Permute(object):
-    """Change input data to a target mode.
-    For example, most transforms use HWC mode image,
-    while the Neural Network might use CHW mode input tensor.
-    Input image should be HWC mode and an instance of numpy.ndarray.
-    Args:
-        mode (str): Output mode of input. Default: "CHW".
-        to_rgb (bool): Convert 'bgr' image to 'rgb'. Default: True.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import Permute
-            transform = Permute()
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, mode="CHW", to_rgb=True):
-        assert mode in [
-            "CHW"
-        ], "Only support 'CHW' mode, but received mode: {}".format(mode)
-        self.mode = mode
-        self.to_rgb = to_rgb
-
-    def __call__(self, img):
-        if self.to_rgb:
-            img = img[..., ::-1]
-        if self.mode == "CHW":
-            return img.transpose((2, 0, 1))
-        return img
-
-
-class GaussianNoise(object):
-    """Add random gaussian noise to the input data.
-    Gaussian noise is generated with given mean and std.
-    Args:
-        mean (float): Gaussian mean used to generate noise.
-        std (float): Gaussian standard deviation used to generate noise.
-
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import GaussianNoise
-            transform = GaussianNoise()
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, mean=0.0, std=1.0):
-        self.mean = np.array(mean, dtype=np.float32)
-        self.std = np.array(std, dtype=np.float32)
-
-    def __call__(self, img):
-        dtype = img.dtype
-        noise = np.random.normal(self.mean, self.std, img.shape) * 255
-        img = img + noise.astype(np.float32)
-        return np.clip(img, 0, 255).astype(dtype)
-
-
-class BrightnessTransform(object):
-    """Adjust brightness of the image.
-    Args:
-        value (float): How much to adjust the brightness. Can be any
-            non negative number. 0 gives the original image
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import BrightnessTransform
-            transform = BrightnessTransform(0.4)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, value):
-        if value < 0:
-            raise ValueError("brightness value should be non-negative")
-        self.value = value
-
-    def __call__(self, img):
-        if self.value == 0:
-            return img
-
-        dtype = img.dtype
-        img = img.astype(np.float32)
-        alpha = np.random.uniform(max(0, 1 - self.value), 1 + self.value)
-        img = img * alpha
-        return img.clip(0, 255).astype(dtype)
-
-
-class ContrastTransform(object):
-    """Adjust contrast of the image.
-    Args:
-        value (float): How much to adjust the contrast. Can be any
-            non negative number. 0 gives the original image
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import ContrastTransform
-            transform = ContrastTransform(0.4)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, value):
-        if value < 0:
-            raise ValueError("contrast value should be non-negative")
-        self.value = value
-
-    def __call__(self, img):
-        if self.value == 0:
-            return img
-
-        dtype = img.dtype
-        img = img.astype(np.float32)
-        alpha = np.random.uniform(max(0, 1 - self.value), 1 + self.value)
-        img = img * alpha + cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).mean() * (
-            1 - alpha)
-        return img.clip(0, 255).astype(dtype)
-
-
-class SaturationTransform(object):
-    """Adjust saturation of the image.
-    Args:
-        value (float): How much to adjust the saturation. Can be any
-            non negative number. 0 gives the original image
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import SaturationTransform
-            transform = SaturationTransform(0.4)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, value):
-        if value < 0:
-            raise ValueError("saturation value should be non-negative")
-        self.value = value
-
-    def __call__(self, img):
-        if self.value == 0:
-            return img
-
-        dtype = img.dtype
-        img = img.astype(np.float32)
-        alpha = np.random.uniform(max(0, 1 - self.value), 1 + self.value)
-        gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray_img = gray_img[..., np.newaxis]
-        img = img * alpha + gray_img * (1 - alpha)
-        return img.clip(0, 255).astype(dtype)
-
-
-class HueTransform(object):
-    """Adjust hue of the image.
-    Args:
-        value (float): How much to adjust the hue. Can be any number
-            between 0 and 0.5, 0 gives the original image
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import HueTransform
-            transform = HueTransform(0.4)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, value):
-        if value < 0 or value > 0.5:
-            raise ValueError("hue value should be in [0.0, 0.5]")
-        self.value = value
-
-    def __call__(self, img):
-        if self.value == 0:
-            return img
-
-        dtype = img.dtype
-        img = img.astype(np.uint8)
-        hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV_FULL)
-        h, s, v = cv2.split(hsv_img)
-
-        alpha = np.random.uniform(-self.value, self.value)
-        h = h.astype(np.uint8)
-        # uint8 addition take cares of rotation across boundaries
-        with np.errstate(over="ignore"):
-            h += np.uint8(alpha * 255)
-        hsv_img = cv2.merge([h, s, v])
-        return cv2.cvtColor(hsv_img, cv2.COLOR_HSV2BGR_FULL).astype(dtype)
-
-
-class ColorJitter(object):
-    """Randomly change the brightness, contrast, saturation and hue of an image.
-    Args:
-        brightness: How much to jitter brightness.
-            Chosen uniformly from [max(0, 1 - brightness), 1 + brightness]. Should be non negative numbers.
-        contrast: How much to jitter contrast.
-            Chosen uniformly from [max(0, 1 - contrast), 1 + contrast]. Should be non negative numbers.
-        saturation: How much to jitter saturation.
-            Chosen uniformly from [max(0, 1 - saturation), 1 + saturation]. Should be non negative numbers.
-        hue: How much to jitter hue.
-            Chosen uniformly from [-hue, hue]. Should have 0<= hue <= 0.5.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import ColorJitter
-            transform = ColorJitter(0.4)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
-        transforms = []
-        if brightness != 0:
-            transforms.append(BrightnessTransform(brightness))
-        if contrast != 0:
-            transforms.append(ContrastTransform(contrast))
-        if saturation != 0:
-            transforms.append(SaturationTransform(saturation))
-        if hue != 0:
-            transforms.append(HueTransform(hue))
-
-        random.shuffle(transforms)
-        self.transforms = Compose(transforms)
-
-    def __call__(self, img):
-        return self.transforms(img)
-
-
-class RandomCrop(object):
-    """Crops the given CV Image at a random location.
-    Args:
-        size (sequence|int): Desired output size of the crop. If size is an
+        size (sequence or int): Desired output size of the crop. If size is an
             int instead of sequence like (h, w), a square crop (size, size) is
             made.
-        padding (int|sequence|optional): Optional padding on each border
-            of the image. If a sequence of length 4 is provided, it is used to pad left,
-            top, right, bottom borders respectively. Default: 0.
-        pad_if_needed (boolean|optional): It will pad the image if smaller than the
-            desired size to avoid raising an exception. Default: False.
-
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import RandomCrop
-            transform = RandomCrop(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
     """
 
-    def __init__(self, size, padding=0, pad_if_needed=False):
+    def __init__(self, size):
         if isinstance(size, numbers.Number):
             self.size = (int(size), int(size))
         else:
             self.size = size
-        self.padding = padding
-        self.pad_if_needed = pad_if_needed
-
-    def _get_params(self, img, output_size):
-        """Get parameters for ``crop`` for a random crop.
-        Args:
-            img (numpy.ndarray): Image to be cropped.
-            output_size (tuple): Expected output size of the crop.
-        Returns:
-            tuple: params (i, j, h, w) to be passed to ``crop`` for random crop.
-        """
-        h, w, _ = img.shape
-        th, tw = output_size
-        if w == tw and h == th:
-            return 0, 0, h, w
-
-        try:
-            i = random.randint(0, h - th)
-        except ValueError:
-            i = random.randint(h - th, 0)
-        try:
-            j = random.randint(0, w - tw)
-        except ValueError:
-            j = random.randint(w - tw, 0)
-        return i, j, th, tw
 
     def __call__(self, img):
         """
         Args:
-            img (numpy.ndarray): Image to be cropped.
+            img (PIL Image): Image to be cropped.
+
         Returns:
-            numpy.ndarray: Cropped image.
+            PIL Image: Cropped image.
         """
-        if self.padding > 0:
-            img = F.pad(img, self.padding)
+        return F.center_crop(img, self.size)
 
-        # pad the width if needed
-        if self.pad_if_needed and img.shape[1] < self.size[1]:
-            img = F.pad(img, (int((1 + self.size[1] - img.shape[1]) / 2), 0))
-        # pad the height if needed
-        if self.pad_if_needed and img.shape[0] < self.size[0]:
-            img = F.pad(img, (0, int((1 + self.size[0] - img.shape[0]) / 2)))
-
-        i, j, h, w = self._get_params(img, self.size)
-
-        return img[i:i + h, j:j + w]
-
-
-class RandomErasing(object):
-    """Randomly selects a rectangle region in an image and erases its pixels.
-    ``Random Erasing Data Augmentation`` by Zhong et al.
-    See https://arxiv.org/pdf/1708.04896.pdf
-    Args:
-         prob (float): probability that the random erasing operation will be performed.
-         scale (tuple): range of proportion of erased area against input image. Should be (min, max).
-         ratio (float): range of aspect ratio of erased area.
-         value (float|list|tuple): erasing value. If a single int, it is used to
-            erase all pixels. If a tuple of length 3, it is used to erase
-            R, G, B channels respectively. Default: 0.
-    Examples:
-
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import RandomCrop
-            transform = RandomCrop(224)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
-    """
-
-    def __init__(self,
-                 prob=0.5,
-                 scale=(0.02, 0.4),
-                 ratio=0.3,
-                 value=[0., 0., 0.]):
-        assert isinstance(value, (
-            float, Sequence
-        )), "Expected type of value in [float, list, tupue], but got {}".format(
-            type(value))
-        assert scale[0] <= scale[1], "scale range should be of kind (min, max)!"
-
-        if isinstance(value, float):
-            self.value = [value, value, value]
-        else:
-            self.value = value
-
-        self.p = prob
-        self.scale = scale
-        self.ratio = ratio
-
-    def __call__(self, img):
-        if random.uniform(0, 1) > self.p:
-            return img
-
-        for _ in range(100):
-            area = img.shape[0] * img.shape[1]
-
-            target_area = random.uniform(self.scale[0], self.scale[1]) * area
-            aspect_ratio = random.uniform(self.ratio, 1 / self.ratio)
-
-            h = int(round(math.sqrt(target_area * aspect_ratio)))
-            w = int(round(math.sqrt(target_area / aspect_ratio)))
-
-            if w < img.shape[1] and h < img.shape[0]:
-                x1 = random.randint(0, img.shape[0] - h)
-                y1 = random.randint(0, img.shape[1] - w)
-
-                if len(img.shape) == 3 and img.shape[2] == 3:
-                    img[x1:x1 + h, y1:y1 + w, 0] = self.value[0]
-                    img[x1:x1 + h, y1:y1 + w, 1] = self.value[1]
-                    img[x1:x1 + h, y1:y1 + w, 2] = self.value[2]
-                else:
-                    img[x1:x1 + h, y1:y1 + w] = self.value[1]
-                return img
-
-        return img
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0})'.format(self.size)
 
 
 class Pad(object):
-    """Pads the given CV Image on all sides with the given "pad" value.
+    """Pad the given PIL Image on all sides with the given "pad" value.
+
     Args:
-        padding (int|list|tuple): Padding on each border. If a single int is provided this
+        padding (int or tuple): Padding on each border. If a single int is provided this
             is used to pad all borders. If tuple of length 2 is provided this is the padding
             on left/right and top/bottom respectively. If a tuple of length 4 is provided
             this is the padding for the left, top, right and bottom borders
             respectively.
-        fill (int|list|tuple): Pixel fill value for constant fill. Default is 0. If a tuple of
+        fill (int or tuple): Pixel fill value for constant fill. Default is 0. If a tuple of
             length 3, it is used to fill R, G, B channels respectively.
             This value is only used when the padding_mode is constant
-        padding_mode (str): Type of padding. Should be: constant, edge, reflect or symmetric. Default is constant.
-            ``constant`` means pads with a constant value, this value is specified with fill.
-            ``edge`` means pads with the last value at the edge of the image.
-            ``reflect`` means pads with reflection of image (without repeating the last value on the edge)
-            padding ``[1, 2, 3, 4]`` with 2 elements on both sides in reflect mode
-            will result in ``[3, 2, 1, 2, 3, 4, 3, 2]``.
-            ``symmetric`` menas pads with reflection of image (repeating the last value on the edge)
-            padding ``[1, 2, 3, 4]`` with 2 elements on both sides in symmetric mode
-            will result in ``[2, 1, 1, 2, 3, 4, 4, 3]``.
-    Examples:
+        padding_mode (str): Type of padding. Should be: constant, edge, reflect or symmetric.
+            Default is constant.
 
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import Pad
-            transform = Pad(2)
-            fake_img = np.random.rand(500, 500, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+            - constant: pads with a constant value, this value is specified with fill
+
+            - edge: pads with the last value at the edge of the image
+
+            - reflect: pads with reflection of image without repeating the last value on the edge
+
+                For example, padding [1, 2, 3, 4] with 2 elements on both sides in reflect mode
+                will result in [3, 2, 1, 2, 3, 4, 3, 2]
+
+            - symmetric: pads with reflection of image repeating the last value on the edge
+
+                For example, padding [1, 2, 3, 4] with 2 elements on both sides in symmetric mode
+                will result in [2, 1, 1, 2, 3, 4, 4, 3]
     """
 
     def __init__(self, padding, fill=0, padding_mode='constant'):
-        assert isinstance(padding, (numbers.Number, list, tuple))
-        assert isinstance(fill, (numbers.Number, str, list, tuple))
+        assert isinstance(padding, (numbers.Number, tuple))
+        assert isinstance(fill, (numbers.Number, str, tuple))
         assert padding_mode in ['constant', 'edge', 'reflect', 'symmetric']
-        if isinstance(padding,
-                      collections.Sequence) and len(padding) not in [2, 4]:
-            raise ValueError(
-                "Padding must be an int or a 2, or 4 element tuple, not a " +
-                "{} element tuple".format(len(padding)))
+        if isinstance(padding, Sequence) and len(padding) not in [2, 4]:
+            raise ValueError("Padding must be an int or a 2, or 4 element tuple, not a " +
+                             "{} element tuple".format(len(padding)))
 
         self.padding = padding
         self.fill = fill
@@ -884,61 +257,562 @@ class Pad(object):
     def __call__(self, img):
         """
         Args:
-            img (numpy.ndarray): Image to be padded.
+            img (PIL Image): Image to be padded.
+
         Returns:
-            numpy.ndarray: Padded image.
+            PIL Image: Padded image.
         """
         return F.pad(img, self.padding, self.fill, self.padding_mode)
 
+    def __repr__(self):
+        return self.__class__.__name__ + '(padding={0}, fill={1}, padding_mode={2})'.\
+            format(self.padding, self.fill, self.padding_mode)
 
-class RandomRotate(object):
-    """Rotates the image by angle.
+
+class Lambda(object):
+    """Apply a user-defined lambda as a transform.
+
+    Args:
+        lambd (function): Lambda/function to be used for transform.
+    """
+
+    def __init__(self, lambd):
+        assert callable(lambd), repr(type(lambd).__name__) + " object is not callable"
+        self.lambd = lambd
+
+    def __call__(self, img):
+        return self.lambd(img)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '()'
+
+
+class RandomTransforms(object):
+    """Base class for a list of transformations with randomness
+
+    Args:
+        transforms (list or tuple): list of transformations
+    """
+
+    def __init__(self, transforms):
+        assert isinstance(transforms, (list, tuple))
+        self.transforms = transforms
+
+    def __call__(self, *args, **kwargs):
+        raise NotImplementedError()
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
+
+
+class RandomApply(RandomTransforms):
+    """Apply randomly a list of transformations with a given probability
+
+    Args:
+        transforms (list or tuple): list of transformations
+        p (float): probability
+    """
+
+    def __init__(self, transforms, p=0.5):
+        super(RandomApply, self).__init__(transforms)
+        self.p = p
+
+    def __call__(self, img):
+        if self.p < random.random():
+            return img
+        for t in self.transforms:
+            img = t(img)
+        return img
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        format_string += '\n    p={}'.format(self.p)
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
+
+
+class RandomOrder(RandomTransforms):
+    """Apply a list of transformations in a random order
+    """
+    def __call__(self, img):
+        order = list(range(len(self.transforms)))
+        random.shuffle(order)
+        for i in order:
+            img = self.transforms[i](img)
+        return img
+
+
+class RandomChoice(RandomTransforms):
+    """Apply single transformation randomly picked from a list
+    """
+    def __call__(self, img):
+        t = random.choice(self.transforms)
+        return t(img)
+
+
+class RandomCrop(object):
+    """Crop the given PIL Image at a random location.
+
+    Args:
+        size (sequence or int): Desired output size of the crop. If size is an
+            int instead of sequence like (h, w), a square crop (size, size) is
+            made.
+        padding (int or sequence, optional): Optional padding on each border
+            of the image. Default is None, i.e no padding. If a sequence of length
+            4 is provided, it is used to pad left, top, right, bottom borders
+            respectively. If a sequence of length 2 is provided, it is used to
+            pad left/right, top/bottom borders, respectively.
+        pad_if_needed (boolean): It will pad the image if smaller than the
+            desired size to avoid raising an exception.
+        fill: Pixel fill value for constant fill. Default is 0. If a tuple of
+            length 3, it is used to fill R, G, B channels respectively.
+            This value is only used when the padding_mode is constant
+        padding_mode: Type of padding. Should be: constant, edge, reflect or symmetric. Default is constant.
+
+             - constant: pads with a constant value, this value is specified with fill
+
+             - edge: pads with the last value on the edge of the image
+
+             - reflect: pads with reflection of image (without repeating the last value on the edge)
+
+                padding [1, 2, 3, 4] with 2 elements on both sides in reflect mode
+                will result in [3, 2, 1, 2, 3, 4, 3, 2]
+
+             - symmetric: pads with reflection of image (repeating the last value on the edge)
+
+                padding [1, 2, 3, 4] with 2 elements on both sides in symmetric mode
+                will result in [2, 1, 1, 2, 3, 4, 4, 3]
+
+    """
+
+    def __init__(self, size, padding=None, pad_if_needed=False, fill=0, padding_mode='constant'):
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            self.size = size
+        self.padding = padding
+        self.pad_if_needed = pad_if_needed
+        self.fill = fill
+        self.padding_mode = padding_mode
+
+    @staticmethod
+    def get_params(img, output_size):
+        """Get parameters for ``crop`` for a random crop.
+
+        Args:
+            img (PIL Image): Image to be cropped.
+            output_size (tuple): Expected output size of the crop.
+
+        Returns:
+            tuple: params (i, j, h, w) to be passed to ``crop`` for random crop.
+        """
+        w, h = img.size
+        th, tw = output_size
+        if w == tw and h == th:
+            return 0, 0, h, w
+
+        i = random.randint(0, h - th)
+        j = random.randint(0, w - tw)
+        return i, j, th, tw
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be cropped.
+
+        Returns:
+            PIL Image: Cropped image.
+        """
+        if self.padding is not None:
+            img = F.pad(img, self.padding, self.fill, self.padding_mode)
+
+        # pad the width if needed
+        if self.pad_if_needed and img.size[0] < self.size[1]:
+            img = F.pad(img, (self.size[1] - img.size[0], 0), self.fill, self.padding_mode)
+        # pad the height if needed
+        if self.pad_if_needed and img.size[1] < self.size[0]:
+            img = F.pad(img, (0, self.size[0] - img.size[1]), self.fill, self.padding_mode)
+
+        i, j, h, w = self.get_params(img, self.size)
+
+        return F.crop(img, i, j, h, w)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0}, padding={1})'.format(self.size, self.padding)
+
+
+class RandomHorizontalFlip(object):
+    """Horizontally flip the given PIL Image randomly with a given probability.
+
+    Args:
+        p (float): probability of the image being flipped. Default value is 0.5
+    """
+
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be flipped.
+
+        Returns:
+            PIL Image: Randomly flipped image.
+        """
+        if random.random() < self.p:
+            return F.hflip(img)
+        return img
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(p={})'.format(self.p)
+
+
+class RandomVerticalFlip(object):
+    """Vertically flip the given PIL Image randomly with a given probability.
+
+    Args:
+        p (float): probability of the image being flipped. Default value is 0.5
+    """
+
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be flipped.
+
+        Returns:
+            PIL Image: Randomly flipped image.
+        """
+        if random.random() < self.p:
+            return F.vflip(img)
+        return img
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(p={})'.format(self.p)
+
+
+class RandomResizedCrop(object):
+    """Crop the given PIL Image to random size and aspect ratio.
+
+    A crop of random size (default: of 0.08 to 1.0) of the original size and a random
+    aspect ratio (default: of 3/4 to 4/3) of the original aspect ratio is made. This crop
+    is finally resized to given size.
+    This is popularly used to train the Inception networks.
+
+    Args:
+        size: expected output size of each edge
+        scale: range of size of the origin size cropped
+        ratio: range of aspect ratio of the origin aspect ratio cropped
+        interpolation: Default: PIL.Image.BILINEAR
+    """
+
+    def __init__(self, size, scale=(0.08, 1.0), ratio=(3. / 4., 4. / 3.), interpolation=Image.BILINEAR):
+        if isinstance(size, tuple):
+            self.size = size
+        else:
+            self.size = (size, size)
+        if (scale[0] > scale[1]) or (ratio[0] > ratio[1]):
+            warnings.warn("range should be of kind (min, max)")
+
+        self.interpolation = interpolation
+        self.scale = scale
+        self.ratio = ratio
+
+    @staticmethod
+    def get_params(img, scale, ratio):
+        """Get parameters for ``crop`` for a random sized crop.
+
+        Args:
+            img (PIL Image): Image to be cropped.
+            scale (tuple): range of size of the origin size cropped
+            ratio (tuple): range of aspect ratio of the origin aspect ratio cropped
+
+        Returns:
+            tuple: params (i, j, h, w) to be passed to ``crop`` for a random
+                sized crop.
+        """
+        area = img.size[0] * img.size[1]
+
+        for attempt in range(10):
+            target_area = random.uniform(*scale) * area
+            aspect_ratio = random.uniform(*ratio)
+
+            w = int(round(math.sqrt(target_area * aspect_ratio)))
+            h = int(round(math.sqrt(target_area / aspect_ratio)))
+
+            if random.random() < 0.5 and min(ratio) <= (h / w) <= max(ratio):
+                w, h = h, w
+
+            if w <= img.size[0] and h <= img.size[1]:
+                i = random.randint(0, img.size[1] - h)
+                j = random.randint(0, img.size[0] - w)
+                return i, j, h, w
+
+        # Fallback
+        w = min(img.size[0], img.size[1])
+        i = (img.size[1] - w) // 2
+        j = (img.size[0] - w) // 2
+        return i, j, w, w
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be cropped and resized.
+
+        Returns:
+            PIL Image: Randomly cropped and resized image.
+        """
+        i, j, h, w = self.get_params(img, self.scale, self.ratio)
+        return F.resized_crop(img, i, j, h, w, self.size, self.interpolation)
+
+    def __repr__(self):
+        interpolate_str = _pil_interpolation_to_str[self.interpolation]
+        format_string = self.__class__.__name__ + '(size={0}'.format(self.size)
+        format_string += ', scale={0}'.format(tuple(round(s, 4) for s in self.scale))
+        format_string += ', ratio={0}'.format(tuple(round(r, 4) for r in self.ratio))
+        format_string += ', interpolation={0})'.format(interpolate_str)
+        return format_string
+
+
+class RandomSizedCrop(RandomResizedCrop):
+    """
+    Note: This transform is deprecated in favor of RandomResizedCrop.
+    """
+    def __init__(self, *args, **kwargs):
+        warnings.warn("The use of the transforms.RandomSizedCrop transform is deprecated, " +
+                      "please use transforms.RandomResizedCrop instead.")
+        super(RandomSizedCrop, self).__init__(*args, **kwargs)
+
+
+class FiveCrop(object):
+    """Crop the given PIL Image into four corners and the central crop
+
+    .. Note::
+         This transform returns a tuple of images and there may be a mismatch in the number of
+         inputs and targets your Dataset returns. See below for an example of how to deal with
+         this.
+
+    Args:
+         size (sequence or int): Desired output size of the crop. If size is an ``int``
+            instead of sequence like (h, w), a square crop of size (size, size) is made.
+
+    Example:
+         >>> transform = Compose([
+         >>>    FiveCrop(size), # this is a list of PIL Images
+         >>>    Lambda(lambda crops: torch.stack([ToTensor()(crop) for crop in crops])) # returns a 4D tensor
+         >>> ])
+         >>> #In your test loop you can do the following:
+         >>> input, target = batch # input is a 5d tensor, target is 2d
+         >>> bs, ncrops, c, h, w = input.size()
+         >>> result = model(input.view(-1, c, h, w)) # fuse batch size and ncrops
+         >>> result_avg = result.view(bs, ncrops, -1).mean(1) # avg over crops
+    """
+
+    def __init__(self, size):
+        self.size = size
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+            self.size = size
+
+    def __call__(self, img):
+        return F.five_crop(img, self.size)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0})'.format(self.size)
+
+
+class TenCrop(object):
+    """Crop the given PIL Image into four corners and the central crop plus the flipped version of
+    these (horizontal flipping is used by default)
+
+    .. Note::
+         This transform returns a tuple of images and there may be a mismatch in the number of
+         inputs and targets your Dataset returns. See below for an example of how to deal with
+         this.
+
+    Args:
+        size (sequence or int): Desired output size of the crop. If size is an
+            int instead of sequence like (h, w), a square crop (size, size) is
+            made.
+        vertical_flip(bool): Use vertical flipping instead of horizontal
+
+    Example:
+         >>> transform = Compose([
+         >>>    TenCrop(size), # this is a list of PIL Images
+         >>>    Lambda(lambda crops: torch.stack([ToTensor()(crop) for crop in crops])) # returns a 4D tensor
+         >>> ])
+         >>> #In your test loop you can do the following:
+         >>> input, target = batch # input is a 5d tensor, target is 2d
+         >>> bs, ncrops, c, h, w = input.size()
+         >>> result = model(input.view(-1, c, h, w)) # fuse batch size and ncrops
+         >>> result_avg = result.view(bs, ncrops, -1).mean(1) # avg over crops
+    """
+
+    def __init__(self, size, vertical_flip=False):
+        self.size = size
+        if isinstance(size, numbers.Number):
+            self.size = (int(size), int(size))
+        else:
+            assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+            self.size = size
+        self.vertical_flip = vertical_flip
+
+    def __call__(self, img):
+        return F.ten_crop(img, self.size, self.vertical_flip)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(size={0}, vertical_flip={1})'.format(self.size, self.vertical_flip)
+
+
+class ColorJitter(object):
+    """Randomly change the brightness, contrast and saturation of an image.
+
+    Args:
+        brightness (float or tuple of float (min, max)): How much to jitter brightness.
+            brightness_factor is chosen uniformly from [max(0, 1 - brightness), 1 + brightness]
+            or the given [min, max]. Should be non negative numbers.
+        contrast (float or tuple of float (min, max)): How much to jitter contrast.
+            contrast_factor is chosen uniformly from [max(0, 1 - contrast), 1 + contrast]
+            or the given [min, max]. Should be non negative numbers.
+        saturation (float or tuple of float (min, max)): How much to jitter saturation.
+            saturation_factor is chosen uniformly from [max(0, 1 - saturation), 1 + saturation]
+            or the given [min, max]. Should be non negative numbers.
+        hue (float or tuple of float (min, max)): How much to jitter hue.
+            hue_factor is chosen uniformly from [-hue, hue] or the given [min, max].
+            Should have 0<= hue <= 0.5 or -0.5 <= min <= max <= 0.5.
+    """
+    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
+        self.brightness = self._check_input(brightness, 'brightness')
+        self.contrast = self._check_input(contrast, 'contrast')
+        self.saturation = self._check_input(saturation, 'saturation')
+        self.hue = self._check_input(hue, 'hue', center=0, bound=(-0.5, 0.5),
+                                     clip_first_on_zero=False)
+
+    def _check_input(self, value, name, center=1, bound=(0, float('inf')), clip_first_on_zero=True):
+        if isinstance(value, numbers.Number):
+            if value < 0:
+                raise ValueError("If {} is a single number, it must be non negative.".format(name))
+            value = [center - value, center + value]
+            if clip_first_on_zero:
+                value[0] = max(value[0], 0)
+        elif isinstance(value, (tuple, list)) and len(value) == 2:
+            if not bound[0] <= value[0] <= value[1] <= bound[1]:
+                raise ValueError("{} values should be between {}".format(name, bound))
+        else:
+            raise TypeError("{} should be a single number or a list/tuple with lenght 2.".format(name))
+
+        # if value is 0 or (1., 1.) for brightness/contrast/saturation
+        # or (0., 0.) for hue, do nothing
+        if value[0] == value[1] == center:
+            value = None
+        return value
+
+    @staticmethod
+    def get_params(brightness, contrast, saturation, hue):
+        """Get a randomized transform to be applied on image.
+
+        Arguments are same as that of __init__.
+
+        Returns:
+            Transform which randomly adjusts brightness, contrast and
+            saturation in a random order.
+        """
+        transforms = []
+
+        if brightness is not None:
+            brightness_factor = random.uniform(brightness[0], brightness[1])
+            transforms.append(Lambda(lambda img: F.adjust_brightness(img, brightness_factor)))
+
+        if contrast is not None:
+            contrast_factor = random.uniform(contrast[0], contrast[1])
+            transforms.append(Lambda(lambda img: F.adjust_contrast(img, contrast_factor)))
+
+        if saturation is not None:
+            saturation_factor = random.uniform(saturation[0], saturation[1])
+            transforms.append(Lambda(lambda img: F.adjust_saturation(img, saturation_factor)))
+
+        if hue is not None:
+            hue_factor = random.uniform(hue[0], hue[1])
+            transforms.append(Lambda(lambda img: F.adjust_hue(img, hue_factor)))
+
+        random.shuffle(transforms)
+        transform = Compose(transforms)
+
+        return transform
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Input image.
+
+        Returns:
+            PIL Image: Color jittered image.
+        """
+        transform = self.get_params(self.brightness, self.contrast,
+                                    self.saturation, self.hue)
+        return transform(img)
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        format_string += 'brightness={0}'.format(self.brightness)
+        format_string += ', contrast={0}'.format(self.contrast)
+        format_string += ', saturation={0}'.format(self.saturation)
+        format_string += ', hue={0})'.format(self.hue)
+        return format_string
+
+
+class RandomRotation(object):
+    """Rotate the image by angle.
+
     Args:
         degrees (sequence or float or int): Range of degrees to select from.
             If degrees is a number instead of sequence like (min, max), the range of degrees
-            will be (-degrees, +degrees) clockwise order.
-        interpolation (int|optional): Interpolation mode of resize. Default: cv2.INTER_LINEAR.
-        expand (bool|optional): Optional expansion flag. Default: False.
+            will be (-degrees, +degrees).
+        resample ({PIL.Image.NEAREST, PIL.Image.BILINEAR, PIL.Image.BICUBIC}, optional):
+            An optional resampling filter. See `filters`_ for more information.
+            If omitted, or if the image has mode "1" or "P", it is set to PIL.Image.NEAREST.
+        expand (bool, optional): Optional expansion flag.
             If true, expands the output to make it large enough to hold the entire rotated image.
             If false or omitted, make the output image the same size as the input image.
             Note that the expand flag assumes rotation around the center and no translation.
-        center (2-tuple|optional): Optional center of rotation.
+        center (2-tuple, optional): Optional center of rotation.
             Origin is the upper left corner.
             Default is the center of the image.
 
-    Examples:
+    .. _filters: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#filters
 
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import RandomRotate
-            transform = RandomRotate(90)
-            fake_img = np.random.rand(500, 400, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
     """
 
-    def __init__(self,
-                 degrees,
-                 interpolation=cv2.INTER_LINEAR,
-                 expand=False,
-                 center=None):
+    def __init__(self, degrees, resample=False, expand=False, center=None):
         if isinstance(degrees, numbers.Number):
             if degrees < 0:
-                raise ValueError(
-                    "If degrees is a single number, it must be positive.")
+                raise ValueError("If degrees is a single number, it must be positive.")
             self.degrees = (-degrees, degrees)
         else:
             if len(degrees) != 2:
-                raise ValueError(
-                    "If degrees is a sequence, it must be of len 2.")
+                raise ValueError("If degrees is a sequence, it must be of len 2.")
             self.degrees = degrees
 
-        self.interpolation = interpolation
+        self.resample = resample
         self.expand = expand
         self.center = center
 
-    def _get_params(self, degrees):
+    @staticmethod
+    def get_params(degrees):
         """Get parameters for ``rotate`` for a random rotation.
+
         Returns:
             sequence: params to be passed to ``rotate`` for random rotation.
         """
@@ -948,44 +822,207 @@ class RandomRotate(object):
 
     def __call__(self, img):
         """
-            img (np.ndarray): Image to be rotated.
+            img (PIL Image): Image to be rotated.
+
         Returns:
-            np.ndarray: Rotated image.
+            PIL Image: Rotated image.
         """
 
-        angle = self._get_params(self.degrees)
+        angle = self.get_params(self.degrees)
 
-        return F.rotate(img, angle, self.interpolation, self.expand,
-                        self.center)
+        return F.rotate(img, angle, self.resample, self.expand, self.center)
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '(degrees={0}'.format(self.degrees)
+        format_string += ', resample={0}'.format(self.resample)
+        format_string += ', expand={0}'.format(self.expand)
+        if self.center is not None:
+            format_string += ', center={0}'.format(self.center)
+        format_string += ')'
+        return format_string
+
+
+class RandomAffine(object):
+    """Random affine transformation of the image keeping center invariant
+
+    Args:
+        degrees (sequence or float or int): Range of degrees to select from.
+            If degrees is a number instead of sequence like (min, max), the range of degrees
+            will be (-degrees, +degrees). Set to 0 to deactivate rotations.
+        translate (tuple, optional): tuple of maximum absolute fraction for horizontal
+            and vertical translations. For example translate=(a, b), then horizontal shift
+            is randomly sampled in the range -img_width * a < dx < img_width * a and vertical shift is
+            randomly sampled in the range -img_height * b < dy < img_height * b. Will not translate by default.
+        scale (tuple, optional): scaling factor interval, e.g (a, b), then scale is
+            randomly sampled from the range a <= scale <= b. Will keep original scale by default.
+        shear (sequence or float or int, optional): Range of degrees to select from.
+            If degrees is a number instead of sequence like (min, max), the range of degrees
+            will be (-degrees, +degrees). Will not apply shear by default
+        resample ({PIL.Image.NEAREST, PIL.Image.BILINEAR, PIL.Image.BICUBIC}, optional):
+            An optional resampling filter. See `filters`_ for more information.
+            If omitted, or if the image has mode "1" or "P", it is set to PIL.Image.NEAREST.
+        fillcolor (int): Optional fill color for the area outside the transform in the output image. (Pillow>=5.0.0)
+
+    .. _filters: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#filters
+
+    """
+
+    def __init__(self, degrees, translate=None, scale=None, shear=None, resample=False, fillcolor=0):
+        if isinstance(degrees, numbers.Number):
+            if degrees < 0:
+                raise ValueError("If degrees is a single number, it must be positive.")
+            self.degrees = (-degrees, degrees)
+        else:
+            assert isinstance(degrees, (tuple, list)) and len(degrees) == 2, \
+                "degrees should be a list or tuple and it must be of length 2."
+            self.degrees = degrees
+
+        if translate is not None:
+            assert isinstance(translate, (tuple, list)) and len(translate) == 2, \
+                "translate should be a list or tuple and it must be of length 2."
+            for t in translate:
+                if not (0.0 <= t <= 1.0):
+                    raise ValueError("translation values should be between 0 and 1")
+        self.translate = translate
+
+        if scale is not None:
+            assert isinstance(scale, (tuple, list)) and len(scale) == 2, \
+                "scale should be a list or tuple and it must be of length 2."
+            for s in scale:
+                if s <= 0:
+                    raise ValueError("scale values should be positive")
+        self.scale = scale
+
+        if shear is not None:
+            if isinstance(shear, numbers.Number):
+                if shear < 0:
+                    raise ValueError("If shear is a single number, it must be positive.")
+                self.shear = (-shear, shear)
+            else:
+                assert isinstance(shear, (tuple, list)) and len(shear) == 2, \
+                    "shear should be a list or tuple and it must be of length 2."
+                self.shear = shear
+        else:
+            self.shear = shear
+
+        self.resample = resample
+        self.fillcolor = fillcolor
+
+    @staticmethod
+    def get_params(degrees, translate, scale_ranges, shears, img_size):
+        """Get parameters for affine transformation
+
+        Returns:
+            sequence: params to be passed to the affine transformation
+        """
+        angle = random.uniform(degrees[0], degrees[1])
+        if translate is not None:
+            max_dx = translate[0] * img_size[0]
+            max_dy = translate[1] * img_size[1]
+            translations = (np.round(random.uniform(-max_dx, max_dx)),
+                            np.round(random.uniform(-max_dy, max_dy)))
+        else:
+            translations = (0, 0)
+
+        if scale_ranges is not None:
+            scale = random.uniform(scale_ranges[0], scale_ranges[1])
+        else:
+            scale = 1.0
+
+        if shears is not None:
+            shear = random.uniform(shears[0], shears[1])
+        else:
+            shear = 0.0
+
+        return angle, translations, scale, shear
+
+    def __call__(self, img):
+        """
+            img (PIL Image): Image to be transformed.
+
+        Returns:
+            PIL Image: Affine transformed image.
+        """
+        ret = self.get_params(self.degrees, self.translate, self.scale, self.shear, img.size)
+        return F.affine(img, *ret, resample=self.resample, fillcolor=self.fillcolor)
+
+    def __repr__(self):
+        s = '{name}(degrees={degrees}'
+        if self.translate is not None:
+            s += ', translate={translate}'
+        if self.scale is not None:
+            s += ', scale={scale}'
+        if self.shear is not None:
+            s += ', shear={shear}'
+        if self.resample > 0:
+            s += ', resample={resample}'
+        if self.fillcolor != 0:
+            s += ', fillcolor={fillcolor}'
+        s += ')'
+        d = dict(self.__dict__)
+        d['resample'] = _pil_interpolation_to_str[d['resample']]
+        return s.format(name=self.__class__.__name__, **d)
 
 
 class Grayscale(object):
-    """Converts image to grayscale.
-    Args:
-        output_channels (int): (1 or 3) number of channels desired for output image
-    Returns:
-        CV Image: Grayscale version of the input.
-        - If output_channels == 1 : returned image is single channel
-        - If output_channels == 3 : returned image is 3 channel with r == g == b
-    Examples:
+    """Convert image to grayscale.
 
-        .. code-block:: python
-            import numpy as np
-            from paddle.incubate.hapi.vision.transforms import Grayscale
-            transform = Grayscale()
-            fake_img = np.random.rand(500, 400, 3).astype('float32')
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+    Args:
+        num_output_channels (int): (1 or 3) number of channels desired for output image
+
+    Returns:
+        PIL Image: Grayscale version of the input.
+        - If num_output_channels == 1 : returned image is single channel
+        - If num_output_channels == 3 : returned image is 3 channel with r == g == b
+
     """
 
-    def __init__(self, output_channels=1):
-        self.output_channels = output_channels
+    def __init__(self, num_output_channels=1):
+        self.num_output_channels = num_output_channels
 
     def __call__(self, img):
         """
         Args:
-            img (numpy.ndarray): Image to be converted to grayscale.
+            img (PIL Image): Image to be converted to grayscale.
+
         Returns:
-            numpy.ndarray: Randomly grayscaled image.
+            PIL Image: Randomly grayscaled image.
         """
-        return F.to_grayscale(img, num_output_channels=self.output_channels)
+        return F.to_grayscale(img, num_output_channels=self.num_output_channels)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(num_output_channels={0})'.format(self.num_output_channels)
+
+
+class RandomGrayscale(object):
+    """Randomly convert image to grayscale with a probability of p (default 0.1).
+
+    Args:
+        p (float): probability that image should be converted to grayscale.
+
+    Returns:
+        PIL Image: Grayscale version of the input image with probability p and unchanged
+        with probability (1-p).
+        - If input image is 1 channel: grayscale version is 1 channel
+        - If input image is 3 channel: grayscale version is 3 channel with r == g == b
+
+    """
+
+    def __init__(self, p=0.1):
+        self.p = p
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be converted to grayscale.
+
+        Returns:
+            PIL Image: Randomly grayscaled image.
+        """
+        num_output_channels = 1 if img.mode == 'L' else 3
+        if random.random() < self.p:
+            return F.to_grayscale(img, num_output_channels=num_output_channels)
+        return img
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(p={0})'.format(self.p)
