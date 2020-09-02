@@ -15,6 +15,7 @@ from visualdl import LogWriter
 import json
 import math
 from paddle.fluid import ParamAttr
+from model_test.resnet_3d import ResNet_3d
 
 num_sample = 9537
 BATCH_SIZE = 128
@@ -51,8 +52,11 @@ if __name__ == '__main__':
         val_data_loader = fluid.io.DataLoader.from_generator(capacity=5)
         train_data_loader.set_sample_list_generator(train_reader, places=place)
         val_data_loader.set_sample_list_generator(val_reader, places=place)
-        model = generate_model(50, n_classes=1039)
-        state_dic, _ = fluid.dygraph.load_dygraph('paddle_resnet50_mk.pdparams')
+
+        # model = generate_model(50, n_classes=1039)
+        # state_dic, _ = fluid.dygraph.load_dygraph('paddle_resnet50_mk.pdparams')
+        state_dic, _ = fluid.dygraph.load_dygraph('resnet_3d_model.pdparams')
+        model = ResNet_3d(class_dim=1039)
         model.set_dict(state_dic)
         stdv = 1. / math.sqrt(model.fc_in_dim)
         model.fc = Linear(model.fc_in_dim, n_classes,
@@ -67,6 +71,7 @@ if __name__ == '__main__':
         # for k, v in model.named_parameters():
         #     name = get_module_name(k,1)
         #     if 'layer4' == name:
+        #     if 'res5a' == name:
         #         add_flag = True
         #     if add_flag:
         #         if 'bn' in k:
