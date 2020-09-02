@@ -159,6 +159,29 @@ class MultiScaleCornerCrop(object):
         return self.__class__.__name__ + '(size={0}, scales={1}, interpolation={2})'.format(
             self.size, self.scales, self.interpolation)
 
+class RandomResizedCrop1():
+    def __init__(self, size,
+                 interpolation=Image.BILINEAR):
+        super().__init__()
+        self.size = size
+        self.interpolation = interpolation
+        self.randomize_parameters()
+
+    def __call__(self, img):
+        w, h = img.size
+        th, tw = self.size, self.size
+        if self.randomize:
+            self.x1 = random.randint(0, w - tw)
+            self.y1 = random.randint(0, h - th)
+        if w == tw and h == th:
+            return img
+        else:
+            return img.crop((self.x1, self.y1, self.x1 + tw, self.y1 + th))
+
+
+    def randomize_parameters(self):
+        self.randomize = True
+
 
 class RandomResizedCrop(transforms.RandomResizedCrop):
 

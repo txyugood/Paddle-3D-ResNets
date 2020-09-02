@@ -3,7 +3,7 @@ import json
 import paddle
 from VideoLoader import VideoLoader
 from temporal_transforms import Compose as TemporalCompose,TemporalRandomCrop, TemporalEvenCrop,SlidingWindow
-from spatial_transforms import Compose, MultiScaleCornerCrop ,RandomResizedCrop, RandomHorizontalFlip, ScaleValue, Normalize, Resize, CenterCrop
+from spatial_transforms import Compose, RandomResizedCrop1,RandomResizedCrop, RandomHorizontalFlip, ScaleValue, Normalize, Resize, CenterCrop
 
 import numpy as np
 import copy
@@ -292,10 +292,11 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
         #         112, (0.25, 1.0),
         #         (0.75, 1.0 / 0.75)))
 
-        spatial_transform.append(
-            RandomResizedCrop(
-                112, (0.25, 1.0),
-                (0.75, 1.0 / 0.75)))
+        # spatial_transform.append(
+        #     RandomResizedCrop(
+        #         112, (0.25, 1.0),
+        #         (0.75, 1.0 / 0.75)))
+        spatial_transform.append(RandomResizedCrop1(112))
         spatial_transform.append(RandomHorizontalFlip())
         spatial_transform.append(ScaleValue(255.0))
         spatial_transform.append(Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714]))
