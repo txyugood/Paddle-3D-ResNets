@@ -36,15 +36,15 @@ def get_module_name(name,l=1):
     return '.'.join(name[i:i+l])
 
 if __name__ == '__main__':
-    # root_path = '/home/aistudio/dataset/UCF-101-jpg'
-    root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
+    root_path = '/home/aistudio/dataset/UCF-101-jpg'
+    # root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
     annotation_path = 'ucf101_json/ucf101_01.json'
     train_reader = custom_reader(Path(root_path), Path(annotation_path), mode='train', batch_size=BATCH_SIZE)
     val_reader = custom_reader(Path(root_path), Path(annotation_path), mode='val', batch_size=BATCH_SIZE)
 
     iter_per_epoch = num_sample // BATCH_SIZE
     boundaries = [iter_per_epoch * 50, iter_per_epoch * 100, iter_per_epoch * 150]
-    use_gpu = False
+    use_gpu = True
     place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
 
     with fluid.dygraph.guard(place):
@@ -52,11 +52,8 @@ if __name__ == '__main__':
         val_data_loader = fluid.io.DataLoader.from_generator(capacity=5)
         train_data_loader.set_sample_list_generator(train_reader, places=place)
         val_data_loader.set_sample_list_generator(val_reader, places=place)
-
-        # model = generate_model(50, n_classes=1039)
-        # state_dic, _ = fluid.dygraph.load_dygraph('paddle_resnet50_mk.pdparams')
-        state_dic, _ = fluid.dygraph.load_dygraph('resnet_3d_model.pdparams')
-        model = ResNet_3d(class_dim=1039)
+        model = generate_model(50, n_classes=1039)
+        state_dic, _ = fluid.dygraph.load_dygraph('paddle_resnet50_mk.pdparams')
         model.set_dict(state_dic)
         stdv = 1. / math.sqrt(model.fc_in_dim)
         model.fc = Linear(model.fc_in_dim, n_classes,
@@ -66,18 +63,16 @@ if __name__ == '__main__':
                                               initializer=fluid.initializer.Uniform(-stdv, stdv))
                           )
 
-        # parameters = []
-        # add_flag = False
-        # for k, v in model.named_parameters():
-        #     name = get_module_name(k,1)
-        #     if 'layer4' == name:
-        #     if 'res5a' == name:
-        #         add_flag = True
-        #     if add_flag:
-        #         if 'bn' in k:
-        #             v.optimize_attr['learning_rate'] = 0.0
-        #         parameters.append(v)
-        #         print(k)
+        parameters = []
+        add_flag = False
+        for k, v in model.named_parameters():
+            name = get_module_name(k,1)
+            if 'layer4' == name:
+            # if 'res5a' == name:
+                add_flag = True
+            if add_flag:
+                parameters.append(v)
+                print(k)
         # lr = fluid.dygraph.PiecewiseDecay(
         #     boundaries, [0.01, 0.001, 0.0001, 0.00001], 0
         # )
@@ -87,7 +82,7 @@ if __name__ == '__main__':
         #     decay_rate=0.01
         # )
         lr = ReduceLROnPlateau(
-            learning_rate=0.01,
+            learning_rate=0.003,
             mode='min',
             verbose=True,
             patience=10
@@ -95,8 +90,8 @@ if __name__ == '__main__':
         opt = fluid.optimizer.Momentum(
             learning_rate=lr,
             momentum=0.9,
-            parameter_list=model.parameters(),
-            # parameter_list=parameters,
+            # parameter_list=model.parameters(),
+            parameter_list=parameters,
             regularization=L2Decay(1e-3))
 
         for epoch in range(1, MAX_EPOCH + 1):
