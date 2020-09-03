@@ -41,9 +41,7 @@ if __name__ == '__main__':
     annotation_path = 'ucf101_json/ucf101_01.json'
     train_reader = custom_reader(Path(root_path), Path(annotation_path), mode='train', batch_size=BATCH_SIZE)
     val_reader = custom_reader(Path(root_path), Path(annotation_path), mode='val', batch_size=BATCH_SIZE)
-
     train_reader = paddle.batch(fluid.io.shuffle(train_reader, BATCH_SIZE), batch_size=BATCH_SIZE, drop_last=False)
-    val_reader = paddle.batch(val_reader, batch_size=BATCH_SIZE, drop_last=False)
 
     iter_per_epoch = int(math.ceil(num_sample / BATCH_SIZE))
     boundaries = [iter_per_epoch * 50, iter_per_epoch * 100, iter_per_epoch * 150]

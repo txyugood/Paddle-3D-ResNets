@@ -232,7 +232,31 @@ class VideoDatasetMultiClips(VideoDataset):
                     targets = [target for _ in range(len(segments))]
 
                 yield clips, targets
-        return reader
+        def batch_iter_reader():
+            batch_outs = []
+            for outs in reader():
+                batch_outs.append(outs)
+                if len(batch_outs) == self.batch_size:
+                    new_batch_outs = []
+                    for batch_out in batch_outs:
+                        images,labels = batch_out
+                        for image,label in zip(images, labels):
+                            new_batch_outs.append([image, [label]])
+                    yield new_batch_outs
+                    batch_outs = []
+            if not self.drop_last:
+                if len(batch_outs) != 0:
+                    new_batch_outs = []
+                    for batch_out in batch_outs:
+                        images,labels = batch_out
+                        for image,label in zip(images, labels):
+                            new_batch_outs.append([image, [label]])
+                    yield new_batch_outs
+
+        if self.batch_mode == 'batch':
+            return batch_iter_reader
+        else:
+            return reader
 
 def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
     video_path_formatter = (lambda root_path, label, video_id:
@@ -324,7 +348,7 @@ from paddle import fluid
 if __name__ == '__main__':
     root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
     annotation_path = 'ucf101_json/ucf101_01.json'
-    reader = custom_reader(Path(root_path), Path(annotation_path),mode='train',batch_size=128)
+    reader = custom_reader(Path(root_path), Path(annotation_path),mode='val',batch_size=128)
     # r = create_mixup_reader(0.2, reader)
     reader = paddle.batch(fluid.io.shuffle(reader, 128), batch_size=128, drop_last=True)
 
