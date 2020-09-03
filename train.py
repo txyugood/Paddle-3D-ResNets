@@ -15,7 +15,7 @@ from visualdl import LogWriter
 import json
 import math
 from paddle.fluid import ParamAttr
-from model_test.resnet_3d import ResNet_3d
+from utils import AverageMeter
 
 num_sample = 9537
 BATCH_SIZE = 128
@@ -42,7 +42,10 @@ if __name__ == '__main__':
     train_reader = custom_reader(Path(root_path), Path(annotation_path), mode='train', batch_size=BATCH_SIZE)
     val_reader = custom_reader(Path(root_path), Path(annotation_path), mode='val', batch_size=BATCH_SIZE)
 
-    iter_per_epoch = num_sample // BATCH_SIZE
+    train_reader = paddle.batch(fluid.io.shuffle(train_reader, BATCH_SIZE), batch_size=BATCH_SIZE, drop_last=False)
+    val_reader = paddle.batch(val_reader, batch_size=BATCH_SIZE, drop_last=False)
+
+    iter_per_epoch = int(math.ceil(num_sample / BATCH_SIZE))
     boundaries = [iter_per_epoch * 50, iter_per_epoch * 100, iter_per_epoch * 150]
     use_gpu = True
     place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
@@ -95,11 +98,16 @@ if __name__ == '__main__':
             regularization=L2Decay(1e-3))
 
         for epoch in range(1, MAX_EPOCH + 1):
+            batch_time = AverageMeter()
+            data_time = AverageMeter()
+            losses = AverageMeter()
+            accuracies = AverageMeter()
+
+            end_time = time.time()
             model.train()
-            accs = []
-            losses = []
             with LogWriter(logdir="./log/train") as writer:
                 for i, data in enumerate(train_data_loader()):
+                    data_time.update(time.time() - end_time)
                     img, label = data
                     out = model(img)
                     out = fluid.layers.softmax(out)
@@ -107,24 +115,43 @@ if __name__ == '__main__':
                     loss = fluid.layers.reduce_mean(loss)
                     acc = fluid.layers.accuracy(out, label)
 
+                    losses.update(loss.numpy()[0], img.shape[0])
+                    accuracies.update(acc.numpy()[0], img.shape[0])
+
                     loss.backward()
                     opt.minimize(loss)
                     model.clear_gradients()
+                    batch_time.update(time.time() - end_time)
+                    end_time = time.time()
+                    print('Epoch: [{0}][{1}/{2}]\t'
+                          'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                          'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                          'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                          'Acc {acc.val:.3f} ({acc.avg:.3f})'.format(epoch,
+                                                                     i + 1,
+                                                                     iter_per_epoch,
+                                                                     batch_time=batch_time,
+                                                                     data_time=data_time,
+                                                                     loss=losses,
+                                                                     acc=accuracies))
 
-                    accs.append(acc.numpy()[0])
-                    losses.append(loss.numpy()[0])
 
-                    print(f'epoch:{epoch} batch id:{i} loss:{sum(losses) / len(losses)} acc:{sum(accs) / len(accs)}')
                 # 向记录器添加一个tag为`acc`的数据
-                writer.add_scalar(tag="train/acc", step=epoch, value=sum(accs) / len(accs))
+                writer.add_scalar(tag="train/acc", step=epoch, value=accuracies.avg)
                 # 向记录器添加一个tag为`loss`的数据
-                writer.add_scalar(tag="train/loss", step=epoch, value=sum(losses) / len(losses))
-            accs = []
-            losses = []
+                writer.add_scalar(tag="train/loss", step=epoch, value=losses.avg)
+
             with LogWriter(logdir="./log/eval") as writer:
                 with fluid.dygraph.no_grad():
                     model.eval()
+
+                    batch_time = AverageMeter()
+                    data_time = AverageMeter()
+                    losses = AverageMeter()
+                    accuracies = AverageMeter()
+                    end_time = time.time()
                     for i, data in enumerate(val_data_loader()):
+                        data_time.update(time.time() - end_time)
                         img, label = data
                         out = model(img)
                         out = fluid.layers.softmax(out)
@@ -132,30 +159,42 @@ if __name__ == '__main__':
                         loss = fluid.layers.cross_entropy(out, label)
                         loss = fluid.layers.mean(x=loss)
 
-                        accs.append(acc.numpy()[0])
-                        losses.append(loss.numpy()[0])
+                        losses.update(loss.numpy()[0], img.shape[0])
+                        accuracies.update(acc.numpy()[0], img.shape[0])
 
-                        avg_acc = sum(accs) / len(accs)
-                        avg_loss = sum(losses) / len(losses)
+                        batch_time.update(time.time() - end_time)
+                        end_time = time.time()
 
-                        print(f'Test batch id:{i} acc:{avg_acc} loss:{avg_loss}')
+                        print('Epoch: [{0}][{1}/{2}]\t'
+                              'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                              'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                              'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                              'Acc {acc.val:.3f} ({acc.avg:.3f})'.format(
+                            epoch,
+                            i + 1,
+                            91,
+                            batch_time=batch_time,
+                            data_time=data_time,
+                            loss=losses,
+                            acc=accuracies))
+
 
                         # 向记录器添加一个tag为`acc`的数据
-                    writer.add_scalar(tag="train/acc", step=epoch, value=avg_acc)
+                    writer.add_scalar(tag="train/acc", step=epoch, value=accuracies.avg)
                     # 向记录器添加一个tag为`loss`的数据
-                    writer.add_scalar(tag="train/loss", step=epoch, value=avg_loss)
+                    writer.add_scalar(tag="train/loss", step=epoch, value=losses.avg)
 
-                    print(f'Test acc :{avg_acc}, loss:{avg_loss}')
+                    print(f'Test acc :{accuracies.avg}, loss:{losses.avg}')
                     if not os.path.exists('./model_weights'):
                         os.makedirs('./model_weights')
                     with open('./model_weights/eval_log.txt', 'a') as f:
-                        f.write(f'epoch:{epoch} Test acc :{avg_acc}, loss:{avg_loss}\n')
-                    lr.step(to_variable(np.array([avg_loss]).astype('float32')))
+                        f.write(f'epoch:{epoch} Test acc :{accuracies.avg}, loss:{losses.avg}\n')
+                    lr.step(to_variable(np.array([losses.avg]).astype('float32')))
 
-                    if avg_acc > best_accuracy:
+                    if accuracies.avg > best_accuracy:
                         with open('./model_weights/best_accuracy.txt', 'w') as f:
-                            f.write(f'{epoch}:{avg_acc}')
-                        best_accuracy = avg_acc
+                            f.write(f'{epoch}:{accuracies.avg }')
+                        best_accuracy = accuracies.avg
                         fluid.save_dygraph(model.state_dict(), './model_weights/best_accuracy')
                     if epoch % 10 == 0:
                         fluid.save_dygraph(model.state_dict(), f'./model_weights/{epoch}_model')

@@ -144,7 +144,8 @@ class VideoDataset():
         return self._get_reader(self.data)
     def get_multiprocess_reader(self):
         video_lens= len(self.data)
-        worker_per_length = video_lens // self.num_worker
+        total_batch_size = video_lens // self.batch_size
+        worker_per_length = total_batch_size // self.num_worker *self.batch_size
         readers = []
         for i in range(self.num_worker):
             if i == self.num_worker - 1:
@@ -156,6 +157,7 @@ class VideoDataset():
     def _get_reader(self,data):
         def reader():
             if self.mode == 'train':
+                print('shuffle')
                 np.random.shuffle(data)
             for index in range(len(data)):
                 path = data[index]['video']
@@ -174,20 +176,7 @@ class VideoDataset():
                     target = self.target_transform(target)
 
                 yield clip, [target]
-        def batch_iter_reader():
-            batch_outs = []
-            for outs in reader():
-                batch_outs.append(outs)
-                if len(batch_outs) == self.batch_size:
-                    yield batch_outs
-                    batch_outs = []
-            if not self.drop_last:
-                if len(batch_outs) != 0:
-                    yield batch_outs
-        if self.batch_mode == 'batch':
-            return batch_iter_reader
-        else:
-            return reader
+        return reader
 
 
     def __len__(self):
@@ -243,32 +232,7 @@ class VideoDatasetMultiClips(VideoDataset):
                     targets = [target for _ in range(len(segments))]
 
                 yield clips, targets
-
-        def batch_iter_reader():
-            batch_outs = []
-            for outs in reader():
-                batch_outs.append(outs)
-                if len(batch_outs) == self.batch_size:
-                    new_batch_outs = []
-                    for batch_out in batch_outs:
-                        images,labels = batch_out
-                        for image,label in zip(images, labels):
-                            new_batch_outs.append([image, [label]])
-                    yield new_batch_outs
-                    batch_outs = []
-            if not self.drop_last:
-                if len(batch_outs) != 0:
-                    new_batch_outs = []
-                    for batch_out in batch_outs:
-                        images,labels = batch_out
-                        for image,label in zip(images, labels):
-                            new_batch_outs.append([image, [label]])
-                    yield new_batch_outs
-
-        if self.batch_mode == 'batch':
-            return batch_iter_reader
-        else:
-            return reader
+        return reader
 
 def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
     video_path_formatter = (lambda root_path, label, video_id:
@@ -288,9 +252,8 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
 
         spatial_transform.append(
             RandomResizedCrop(
-                112, (1 / (2**(1 / 4)), 1.0),
+                112, (0.25, 1.0),
                 (0.75, 1.0 / 0.75)))
-        spatial_transform.append(ResNet3DPolicy())
         spatial_transform.append(RandomHorizontalFlip())
         spatial_transform.append(ScaleValue(255.0))
         spatial_transform.append(Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714]))
@@ -350,16 +313,21 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
             target_type=['video_id', 'segment'],
             batch_mode='iter')
         return video_dataset.get_multiprocess_reader(),  video_dataset.class_names
-    return video_dataset.get_multiprocess_reader()
-    # return video_dataset.get_singel_reader()
+    # return video_dataset.get_multiprocess_reader()
+    return video_dataset.get_singel_reader()
 
 
 
 from mixup import create_mixup_reader
+import paddle
+from paddle import fluid
 if __name__ == '__main__':
     root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
     annotation_path = 'ucf101_json/ucf101_01.json'
-    reader = custom_reader(Path(root_path), Path(annotation_path),mode='val',batch_size=3)
+    reader = custom_reader(Path(root_path), Path(annotation_path),mode='train',batch_size=128)
     # r = create_mixup_reader(0.2, reader)
-    for data in reader():
-        print('')
+    reader = paddle.batch(fluid.io.shuffle(reader, 128), batch_size=128, drop_last=True)
+
+    for epoch in range(3):
+        for data in reader():
+            print('')
