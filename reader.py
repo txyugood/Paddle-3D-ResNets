@@ -86,7 +86,6 @@ class VideoDataset():
         for i in range(1, 5):
             scales.append(scales[-1] * 0.84089641525)
         self.scales = scales
-        self.policy = ImageNetPolicy()
     def __make_dataset(self, root_path, annotation_path, subset,
                        video_path_formatter):
         with annotation_path.open('r') as f:

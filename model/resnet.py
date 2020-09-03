@@ -303,14 +303,14 @@ if __name__ == '__main__':
             if '_mean' not in k and '_variance' not in k:
                 params_list.append(v)
 
-        opt = fluid.optimizer.SGD(
-            learning_rate=3e-4,
-            # momentum=0.0,
+        opt = fluid.optimizer.Momentum(
+            learning_rate=3e-3,
+            momentum=0.9,
             parameter_list=model.parameters(),
             # parameter_list=parameters,
-            #regularization=fluid.regularizer.L2Decay(0)
+            regularization=fluid.regularizer.L2Decay(0.2)
         )
-
+        nllloss = fluid.dygraph.NLLLoss()
         # data = np.random.uniform(0,1, size=(1,3,32,224,224)).astype('float32')
         # np.save('data.npy',data)
         for i in range(20):
@@ -322,9 +322,13 @@ if __name__ == '__main__':
             label.stop_gradient = True
             data.stop_gradient = True
             y = model(data)
-            y = fluid.layers.softmax(y)
-            loss = fluid.layers.cross_entropy(y, label)
-            loss = fluid.layers.mean(loss)
+            # y = fluid.layers.softmax(y)
+            # y = fluid.layers.log(y)
+            # loss = nllloss(y, label)
+            # loss = fluid.layers.cross_entropy(y, label)
+            # loss = fluid.layers.mean(loss)
+            loss = fluid.layers.reduce_mean(y)
+            loss = fluid.layers.square(loss-1)
             print(f'epoch:{i} loss:{loss.numpy()}')
             np.save(f'loss_{i}.npy', loss.numpy()[0])
             # print(f'epoch:{i} y:{y_mean.numpy()}')

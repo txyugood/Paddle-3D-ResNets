@@ -214,7 +214,7 @@ class SubPolicy(object):
             "translateY": lambda img, magnitude: img.transform(
                 img.size, Image.AFFINE, (1, 0, 0, 0, 1, magnitude * img.size[1] * random.choice([-1, 1])),
                 fillcolor=fillcolor),
-            "rotate": lambda img, magnitude: rotate_with_fill(img, magnitude),
+            "rotate": lambda img, magnitude: rotate_with_fill(img, random.choice([0, 1]) * magnitude),
             # "rotate": lambda img, magnitude: img.rotate(magnitude * random.choice([-1, 1])),
             "color": lambda img, magnitude: ImageEnhance.Color(img).enhance(1 + magnitude * random.choice([-1, 1])),
             "posterize": lambda img, magnitude: ImageOps.posterize(img, magnitude),
@@ -263,8 +263,8 @@ class ResNet3DPolicy(object):
             SubPolicy(0.5, "shearY", 5, 0.5, "translateX", 5, fillcolor),
             SubPolicy(0.5, "shearX", 5, 0.5, "translateY", 2, fillcolor),
             SubPolicy(0.5, "translateY", 3, 0.5, "translateX", 3, fillcolor),
-            SubPolicy(0.5, "translateY", 3, 0.5, "rotate", 3, fillcolor),
-            SubPolicy(0.5, "translateX", 3, 0.5, "rotate", 4, fillcolor),
+            SubPolicy(0.5, "translateY", 3, 0.5, "rotate", 5, fillcolor),
+            SubPolicy(0.5, "translateX", 3, 0.5, "rotate", 8, fillcolor),
             SubPolicy(0.5, "translateY", 4, 0.5, "rotate", 6, fillcolor),
             SubPolicy(0.5, "translateX", 5, 0.5, "rotate", 7, fillcolor),
         ]
