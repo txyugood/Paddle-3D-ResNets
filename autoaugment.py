@@ -52,12 +52,12 @@ class ImageNetPolicy(object):
             SubPolicy(0.8, "equalize", 8, 0.6, "equalize", 3, fillcolor)
         ]
 
-    def __call__(self, imgs, policy_idx=None):
+    def __call__(self, img, policy_idx=None):
         if policy_idx is None or not isinstance(policy_idx, int):
             policy_idx = random.randint(0, len(self.policies) - 1)
         else:
             policy_idx = policy_idx % len(self.policies)
-        return self.policies[policy_idx](imgs)
+        return self.policies[policy_idx](img)
 
     def __repr__(self):
         return "AutoAugment ImageNet Policy"
@@ -202,32 +202,32 @@ class SubPolicy(object):
             return Image.composite(rot, Image.new("RGBA", rot.size, (128,) * 4), rot).convert(img.mode)
 
         func = {
-            "shearX": lambda imgs, magnitude, r_value: [img.transform(
-                img.size, Image.AFFINE, (1, magnitude * r_value, 0, 0, 1, 0),
-                Image.BICUBIC, fillcolor=fillcolor) for img in imgs],
-            "shearY": lambda imgs, magnitude, r_value: [img.transform(
-                img.size, Image.AFFINE, (1, 0, 0, magnitude * r_value, 1, 0),
-                Image.BICUBIC, fillcolor=fillcolor) for img in imgs],
-            "translateX": lambda imgs, magnitude, r_value: [img.transform(
-                img.size, Image.AFFINE, (1, 0, magnitude * img.size[0] * r_value, 0, 1, 0),
-                fillcolor=fillcolor) for img in imgs],
-            "translateY": lambda imgs, magnitude, r_value: [img.transform(
-                img.size, Image.AFFINE, (1, 0, 0, 0, 1, magnitude * img.size[1] * r_value),
-                fillcolor=fillcolor) for img in imgs],
-            "rotate": lambda imgs, magnitude, r_value: [rotate_with_fill(img, magnitude) for img in imgs],
+            "shearX": lambda img, magnitude: img.transform(
+                img.size, Image.AFFINE, (1, magnitude * random.choice([-1, 1]), 0, 0, 1, 0),
+                Image.BICUBIC, fillcolor=fillcolor),
+            "shearY": lambda img, magnitude: img.transform(
+                img.size, Image.AFFINE, (1, 0, 0, magnitude * random.choice([-1, 1]), 1, 0),
+                Image.BICUBIC, fillcolor=fillcolor),
+            "translateX": lambda img, magnitude: img.transform(
+                img.size, Image.AFFINE, (1, 0, magnitude * img.size[0] * random.choice([-1, 1]), 0, 1, 0),
+                fillcolor=fillcolor),
+            "translateY": lambda img, magnitude: img.transform(
+                img.size, Image.AFFINE, (1, 0, 0, 0, 1, magnitude * img.size[1] * random.choice([-1, 1])),
+                fillcolor=fillcolor),
+            "rotate": lambda img, magnitude: rotate_with_fill(img, magnitude),
             # "rotate": lambda img, magnitude: img.rotate(magnitude * random.choice([-1, 1])),
-            "color": lambda imgs, magnitude, r_value: [ImageEnhance.Color(img).enhance(1 + magnitude * r_value) for img in imgs],
-            "posterize": lambda imgs, magnitude, r_value: [ImageOps.posterize(img, magnitude) for img in imgs],
-            "solarize": lambda imgs, magnitude, r_value: [ImageOps.solarize(img, magnitude) for img in imgs],
-            "contrast": lambda imgs, magnitude, r_value: [ImageEnhance.Contrast(img).enhance(
-                1 + magnitude * r_value) for img in imgs],
-            "sharpness": lambda imgs, magnitude, r_value: [ImageEnhance.Sharpness(img).enhance(
-                1 + magnitude * r_value) for img in imgs],
-            "brightness": lambda imgs, magnitude, r_value: [ImageEnhance.Brightness(img).enhance(
-                1 + magnitude *  r_value) for img in imgs],
-            "autocontrast": lambda imgs, magnitude, r_value: [ImageOps.autocontrast(img) for img in imgs],
-            "equalize": lambda imgs, magnitude, r_value: [ImageOps.equalize(img) for img in imgs],
-            "invert": lambda imgs, magnitude, r_value:[ImageOps.invert(img) for img in imgs]
+            "color": lambda img, magnitude: ImageEnhance.Color(img).enhance(1 + magnitude * random.choice([-1, 1])),
+            "posterize": lambda img, magnitude: ImageOps.posterize(img, magnitude),
+            "solarize": lambda img, magnitude: ImageOps.solarize(img, magnitude),
+            "contrast": lambda img, magnitude: ImageEnhance.Contrast(img).enhance(
+                1 + magnitude * random.choice([-1, 1])),
+            "sharpness": lambda img, magnitude: ImageEnhance.Sharpness(img).enhance(
+                1 + magnitude * random.choice([-1, 1])),
+            "brightness": lambda img, magnitude: ImageEnhance.Brightness(img).enhance(
+                1 + magnitude * random.choice([-1, 1])),
+            "autocontrast": lambda img, magnitude: ImageOps.autocontrast(img),
+            "equalize": lambda img, magnitude: ImageOps.equalize(img),
+            "invert": lambda img, magnitude: ImageOps.invert(img)
         }
 
         self.p1 = p1
@@ -237,10 +237,50 @@ class SubPolicy(object):
         self.operation2 = func[operation2]
         self.magnitude2 = ranges[operation2][magnitude_idx2]
 
-    def __call__(self, imgs):
-        r_value = random.choice([-1, 1])
-        if random.random() < self.p1:
-            imgs = self.operation1(imgs, self.magnitude1, r_value)
-        if random.random() < self.p2:
-            imgs = self.operation2(imgs, self.magnitude2, r_value)
-        return imgs
+    def __call__(self, img, randomize=True):
+        if randomize:
+            self.pp1 = random.random()
+            self.pp2 = random.random()
+        if self.pp1 < self.p1: img = self.operation1(img, self.magnitude1)
+        if self.pp2 < self.p2: img = self.operation2(img, self.magnitude2)
+        return img
+
+class ResNet3DPolicy(object):
+    """ Randomly choose one of the best 25 Sub-policies on SVHN.
+
+        Example:
+        >>> policy = ResNet3DPolicy()
+        >>> transformed = policy(image)
+
+        Example as a PyTorch Transform:
+        >>> transform=transforms.Compose([
+        >>>     transforms.Resize(256),
+        >>>     ResNet3DPolicy(),
+        >>>     transforms.ToTensor()])
+    """
+    def __init__(self, fillcolor=(128, 128, 128)):
+        self.policies = [
+            SubPolicy(0.5, "shearY", 5, 0.5, "translateX", 5, fillcolor),
+            SubPolicy(0.5, "shearX", 5, 0.5, "translateY", 2, fillcolor),
+            SubPolicy(0.5, "translateY", 3, 0.5, "translateX", 3, fillcolor),
+            SubPolicy(0.5, "translateY", 3, 0.5, "rotate", 3, fillcolor),
+            SubPolicy(0.5, "translateX", 3, 0.5, "rotate", 4, fillcolor),
+            SubPolicy(0.5, "translateY", 4, 0.5, "rotate", 6, fillcolor),
+            SubPolicy(0.5, "translateX", 5, 0.5, "rotate", 7, fillcolor),
+        ]
+        self.randomize_parameters()
+
+    def __call__(self, img):
+        if self.randomize:
+            self.policy_idx = random.randint(0, len(self.policies) - 1)
+            img = self.policies[self.policy_idx](img, self.randomize)
+            self.randomize = False
+            return img
+        return self.policies[self.policy_idx](img, self.randomize)
+
+    def randomize_parameters(self):
+        self.randomize = True
+
+    def __repr__(self):
+        return "AutoAugment SVHN Policy"
+

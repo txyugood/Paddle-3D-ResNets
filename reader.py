@@ -7,7 +7,7 @@ from spatial_transforms import Compose, RandomResizedCrop1,RandomResizedCrop, Ra
 
 import numpy as np
 import copy
-from  autoaugment import ImageNetPolicy
+from  autoaugment import ResNet3DPolicy
 from temporal_transforms import Shuffle
 import random
 def image_name_formatter(x):
@@ -289,9 +289,9 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
 
         spatial_transform.append(
             RandomResizedCrop(
-                112, (0.25, 1.0),
+                112, (1 / (2**(1 / 4)), 1.0),
                 (0.75, 1.0 / 0.75)))
-
+        spatial_transform.append(ResNet3DPolicy())
         spatial_transform.append(RandomHorizontalFlip())
         spatial_transform.append(ScaleValue(255.0))
         spatial_transform.append(Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714]))
@@ -312,7 +312,7 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
         temporal_transform = TemporalCompose(temporal_transform)
 
         spatial_transform = [
-            Resize(120),
+            Resize(112),
             CenterCrop(112),
             ScaleValue(255.0),
             Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714])
@@ -333,7 +333,7 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
         temporal_transform = [SlidingWindow(16, 16)]
         temporal_transform = TemporalCompose(temporal_transform)
         spatial_transform = [
-            Resize(120),
+            Resize(112),
             CenterCrop(112),
             ScaleValue(255.0),
             Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714])

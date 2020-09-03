@@ -5,7 +5,6 @@ import functional as F
 from PIL import Image
 import numpy as np
 
-
 class Compose(transforms.Compose):
 
     def randomize_parameters(self):
