@@ -337,8 +337,8 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
             target_type=['video_id', 'segment'],
             batch_mode='iter')
         return video_dataset.get_multiprocess_reader(),  video_dataset.class_names
-    # return video_dataset.get_multiprocess_reader()
-    return video_dataset.get_singel_reader()
+    return video_dataset.get_multiprocess_reader()
+    # return video_dataset.get_singel_reader()
 
 
 

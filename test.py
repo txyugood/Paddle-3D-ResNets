@@ -41,7 +41,7 @@ with fluid.dygraph.guard(place):
     with fluid.dygraph.no_grad():
         from collections import defaultdict
         model = generate_model(50, n_classes=101)
-        state_dic, _ = fluid.dygraph.load_dygraph('./model_weights/best_accuracy_1.pdparams')
+        state_dic, _ = fluid.dygraph.load_dygraph('./model_weights/best_accuracy.pdparams')
         model.set_dict(state_dic)
         model.eval()
         results = {'results': defaultdict(list)}
