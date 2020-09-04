@@ -22,6 +22,7 @@ BATCH_SIZE = 128
 MAX_EPOCH = 200
 n_classes = 101
 best_accuracy = 0.0
+MIX_UP = False
 os.system('rm model_weights/eval_log.txt')
 
 
@@ -34,6 +35,21 @@ def get_module_name(name,l=1):
     if name[i] == 'features':
         i += 1
     return '.'.join(name[i:i+l])
+def _calc_label_smoothing_loss(softmax_out, label, class_dim, epsilon):
+    """Calculate label smoothing loss
+
+    Returns:
+        label smoothing loss
+
+    """
+
+    label_one_hot = fluid.layers.one_hot(input=label, depth=class_dim)
+    smooth_label = fluid.layers.label_smooth(
+        label=label_one_hot, epsilon=epsilon, dtype="float32")
+    loss = fluid.layers.cross_entropy(
+        input=softmax_out, label=smooth_label, soft_label=True)
+    return loss
+
 
 if __name__ == '__main__':
     root_path = '/home/aistudio/dataset/UCF-101-jpg'
@@ -42,6 +58,13 @@ if __name__ == '__main__':
     train_reader = custom_reader(Path(root_path), Path(annotation_path), mode='train', batch_size=BATCH_SIZE)
     val_reader = custom_reader(Path(root_path), Path(annotation_path), mode='val', batch_size=BATCH_SIZE)
     train_reader = paddle.batch(fluid.io.shuffle(train_reader, BATCH_SIZE), batch_size=BATCH_SIZE, drop_last=False)
+
+    if MIX_UP:
+        train_reader = create_mixup_reader(0.2, train_reader)
+        train_reader = paddle.batch(
+            train_reader,
+            batch_size=BATCH_SIZE,
+            drop_last=False)
 
     iter_per_epoch = int(math.ceil(num_sample / BATCH_SIZE))
     boundaries = [iter_per_epoch * 50, iter_per_epoch * 100, iter_per_epoch * 150]
@@ -106,12 +129,26 @@ if __name__ == '__main__':
             with LogWriter(logdir="./log/train") as writer:
                 for i, data in enumerate(train_data_loader()):
                     data_time.update(time.time() - end_time)
-                    img, label = data
+                    if MIX_UP:
+                        img, l1, l2, lam = data
+                        lam = fluid.layers.cast(lam, 'float32')
+                    else:
+                        img, label = data
                     out = model(img)
                     out = fluid.layers.softmax(out)
-                    loss = fluid.layers.cross_entropy(out, label)
-                    loss = fluid.layers.reduce_mean(loss)
-                    acc = fluid.layers.accuracy(out, label)
+
+                    if MIX_UP:
+                        loss_a = _calc_label_smoothing_loss(out, l1, n_classes, 0.1)
+                        loss_b = _calc_label_smoothing_loss(out, l2, n_classes, 0.1)
+                        loss_a_mean = fluid.layers.mean(loss_a)
+                        loss_b_mean = fluid.layers.mean(loss_b)
+                        loss = lam * loss_a_mean + (1.0 - lam) * loss_b_mean
+                        loss = fluid.layers.mean(x=loss)
+                        acc = fluid.layers.accuracy(out, l1)
+                    else:
+                        loss = fluid.layers.cross_entropy(out, label)
+                        loss = fluid.layers.reduce_mean(loss)
+                        acc = fluid.layers.accuracy(out, label)
 
                     losses.update(loss.numpy()[0], img.shape[0])
                     accuracies.update(acc.numpy()[0], img.shape[0])
