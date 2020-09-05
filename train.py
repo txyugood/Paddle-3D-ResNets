@@ -91,7 +91,7 @@ if __name__ == '__main__':
         add_flag = False
         for k, v in model.named_parameters():
             name = get_module_name(k,1)
-            if 'layer4' == name:
+            if 'layer3' == name:
             # if 'res5a' == name:
                 add_flag = True
             if add_flag:
@@ -103,14 +103,15 @@ if __name__ == '__main__':
         lr = fluid.dygraph.ExponentialDecay(
             learning_rate=0.003,
             decay_steps=MAX_EPOCH * iter_per_epoch,
-            decay_rate=0.01
+            decay_rate=0.5
         )
 
         if MIX_UP:
-                opt = fluid.optimizer.Adam(
-                learning_rate=1e-4,
-                parameter_list=model.parameters(),
-                # parameter_list=parameters,
+                opt = fluid.optimizer.Momentum(
+                learning_rate=lr,
+                momentum=0.9,
+                #parameter_list=model.parameters(),
+                parameter_list=parameters,
                 regularization=L2Decay(1e-4))
         else:
             # lr = ReduceLROnPlateau(
