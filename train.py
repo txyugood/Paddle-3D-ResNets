@@ -16,6 +16,7 @@ import json
 import math
 from paddle.fluid import ParamAttr
 from utils import AverageMeter
+import argparse
 
 num_sample = 9537
 BATCH_SIZE = 128
@@ -52,6 +53,13 @@ def _calc_label_smoothing_loss(softmax_out, label, class_dim, epsilon):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--mixup',
+        action='store_true',
+        help='If true, enable mixup data augmentation.')
+    args = parser.parse_args()
+    MIX_UP = args.mixup
     root_path = '/home/aistudio/dataset/UCF-101-jpg'
     # root_path = '/Users/alex/baidu/3dresnet-data/UCF-101-jpg'
     annotation_path = 'ucf101_json/ucf101_01.json'
