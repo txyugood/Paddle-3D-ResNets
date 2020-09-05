@@ -22,7 +22,7 @@ BATCH_SIZE = 128
 MAX_EPOCH = 200
 n_classes = 101
 best_accuracy = 0.0
-MIX_UP = False
+MIX_UP = True
 os.system('rm model_weights/eval_log.txt')
 
 
@@ -100,23 +100,31 @@ if __name__ == '__main__':
         # lr = fluid.dygraph.PiecewiseDecay(
         #     boundaries, [0.01, 0.001, 0.0001, 0.00001], 0
         # )
-        # lr = fluid.dygraph.ExponentialDecay(
-        #     learning_rate=0.01,
-        #     decay_steps=MAX_EPOCH * iter_per_epoch,
-        #     decay_rate=0.01
-        # )
-        lr = ReduceLROnPlateau(
+        lr = fluid.dygraph.ExponentialDecay(
             learning_rate=0.003,
-            mode='min',
-            verbose=True,
-            patience=10
+            decay_steps=MAX_EPOCH * iter_per_epoch,
+            decay_rate=0.01
         )
-        opt = fluid.optimizer.Momentum(
-            learning_rate=lr,
-            momentum=0.9,
-            # parameter_list=model.parameters(),
-            parameter_list=parameters,
-            regularization=L2Decay(1e-3))
+
+        if MIX_UP:
+                opt = fluid.optimizer.Adam(
+                learning_rate=1e-4,
+                parameter_list=model.parameters(),
+                # parameter_list=parameters,
+                regularization=L2Decay(1e-4))
+        else:
+            # lr = ReduceLROnPlateau(
+            #     learning_rate=0.003,
+            #     mode='min',
+            #     verbose=True,
+            #     patience=10
+            # )
+            opt = fluid.optimizer.Momentum(
+                learning_rate=lr,
+                momentum=0.9,
+                # parameter_list=model.parameters(),
+                parameter_list=parameters,
+                regularization=L2Decay(1e-3))
 
         for epoch in range(1, MAX_EPOCH + 1):
             batch_time = AverageMeter()
@@ -224,7 +232,7 @@ if __name__ == '__main__':
                         os.makedirs('./model_weights')
                     with open('./model_weights/eval_log.txt', 'a') as f:
                         f.write(f'epoch:{epoch} Test acc :{accuracies.avg}, loss:{losses.avg}\n')
-                    lr.step(to_variable(np.array([losses.avg]).astype('float32')))
+                    # lr.step(to_variable(np.array([losses.avg]).astype('float32')))
 
                     if accuracies.avg > best_accuracy:
                         with open('./model_weights/best_accuracy.txt', 'w') as f:
