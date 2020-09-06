@@ -267,17 +267,17 @@ def custom_reader(root_path, annotation_path,batch_size=1,mode='train'):
         temporal_transform=[TemporalRandomCrop(16)]
         temporal_transform = TemporalCompose(temporal_transform)
 
-        # spatial_transform=[]
-        scales = [1.0]
-        scale_step = 1 / (2**(1 / 4))
-        for _ in range(1, 5):
-            scales.append(scales[-1] * scale_step)
-        spatial_transform = [MultiScaleCornerCrop(112, scales)]
+        spatial_transform=[]
+        # scales = [1.0]
+        # scale_step = 1 / (2**(1 / 4))
+        # for _ in range(1, 5):
+        #     scales.append(scales[-1] * scale_step)
+        # spatial_transform = [MultiScaleCornerCrop(112, scales)]
 
-        # spatial_transform.append(
-        #     RandomResizedCrop(
-        #         112, (0.25, 1.0),
-        #         (0.75, 1.0 / 0.75)))
+        spatial_transform.append(
+            RandomResizedCrop(
+                112, (0.25, 1.0),
+                (0.75, 1.0 / 0.75)))
         spatial_transform.append(RandomHorizontalFlip())
         spatial_transform.append(ScaleValue(255.0))
         spatial_transform.append(Normalize(mean=[0.4477, 0.4209, 0.3906], std=[0.2767, 0.2695, 0.2714]))
