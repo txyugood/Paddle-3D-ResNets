@@ -24,7 +24,6 @@ MAX_EPOCH = 200
 n_classes = 101
 best_accuracy = 0.0
 MIX_UP = True
-os.system('rm model_weights/eval_log.txt')
 
 
 def get_module_name(name,l=1):
@@ -99,39 +98,33 @@ if __name__ == '__main__':
         add_flag = False
         for k, v in model.named_parameters():
             name = get_module_name(k,1)
-            if 'layer3' == name:
-            # if 'res5a' == name:
+            if 'layer4' == name:
                 add_flag = True
             if add_flag:
                 parameters.append(v)
                 print(k)
-        # lr = fluid.dygraph.PiecewiseDecay(
-        #     boundaries, [0.01, 0.001, 0.0001, 0.00001], 0
-        # )
-        lr = fluid.dygraph.ExponentialDecay(
-            learning_rate=0.003,
-            decay_steps=MAX_EPOCH * iter_per_epoch,
-            decay_rate=0.5
-        )
 
         if MIX_UP:
-                opt = fluid.optimizer.Momentum(
-                learning_rate=lr,
-                momentum=0.9,
-                #parameter_list=model.parameters(),
-                parameter_list=parameters,
-                regularization=L2Decay(1e-4))
+            lr = fluid.dygraph.ExponentialDecay(
+                learning_rate=0.003,
+                decay_steps=MAX_EPOCH * iter_per_epoch,
+                decay_rate=0.5
+            )
+            opt = fluid.optimizer.Momentum(
+            learning_rate=lr,
+            momentum=0.9,
+            parameter_list=parameters,
+            regularization=L2Decay(1e-4))
         else:
-            # lr = ReduceLROnPlateau(
-            #     learning_rate=0.003,
-            #     mode='min',
-            #     verbose=True,
-            #     patience=10
-            # )
+            lr = ReduceLROnPlateau(
+                learning_rate=0.003,
+                mode='min',
+                verbose=True,
+                patience=10
+            )
             opt = fluid.optimizer.Momentum(
                 learning_rate=lr,
                 momentum=0.9,
-                # parameter_list=model.parameters(),
                 parameter_list=parameters,
                 regularization=L2Decay(1e-3))
 
