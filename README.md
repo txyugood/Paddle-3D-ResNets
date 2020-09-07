@@ -17,5 +17,5 @@ python train.py
 python train.py --mixup
 ```
 ### 实验结果
-top-1准确率为95.33% 略高于论文中的92.9%。
+top-1准确率为93.55% 略高于论文中的92.9%。
 
